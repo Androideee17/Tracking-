@@ -2,7 +2,10 @@
 # IMPORTACIONES
 # -------------------------------------------------------------------------
 from flask import Flask, request, jsonify
-from flask_cors import CORS
+# =============================================================================
+# CAMBIO 2: Se importa y configura Flask-CORS permitiendo origins="*"
+# =============================================================================
+from flask_cors import CORS  
 import requests
 import os
 from dotenv import load_dotenv  # Para cargar variables de entorno desde .env
@@ -12,13 +15,15 @@ from dotenv import load_dotenv  # Para cargar variables de entorno desde .env
 # -------------------------------------------------------------------------
 load_dotenv()
 
-
 # -------------------------------------------------------------------------
 # INICIALIZACIÓN DE FLASK
 # -------------------------------------------------------------------------
 app = Flask(__name__)
-CORS(app)  # Permite solicitudes desde otro dominio o puerto (CORS)
 
+# =============================================================================
+# CAMBIO 2 (continuación): Configuramos CORS para permitir cualquier origen
+# =============================================================================
+CORS(app, origins="*")  # Permite solicitudes desde cualquier dominio
 
 # =============================================================================
 # CONFIGURACIÓN DE SHOPIFY DESDE VARIABLES DE ENTORNO
@@ -29,7 +34,6 @@ API_SECRET_KEY = os.getenv("API_SECRET_KEY")      # Sólo si usas OAuth
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")          # Token con permisos
 API_URL = f"https://{SHOPIFY_STORE}/admin/api/2023-10/graphql.json"
 
-
 # =============================================================================
 # CREDENCIALES DE PAQUETERÍAS DESDE VARIABLES DE ENTORNO
 # =============================================================================
@@ -37,7 +41,6 @@ DHL_API_KEY = os.getenv("DHL_API_KEY")
 DHL_API_SECRET = os.getenv("DHL_API_SECRET")
 ESTAFETA_API_KEY = os.getenv("ESTAFETA_API_KEY")
 DROPIN_API_KEY = os.getenv("DROPIN_API_KEY")
-
 
 # =============================================================================
 # FUNCIÓN: OBTENER ORDEN DE SHOPIFY (GraphQL)
@@ -120,7 +123,6 @@ def get_order_from_shopify(order_name, email):
         return {"error": f"HTTP Error: {http_err.response.status_code} - {http_err.response.text}"}
     except requests.exceptions.RequestException as e:
         return {"error": str(e)}
-
 
 # =============================================================================
 # FUNCIÓN: OBTENER ESTADO DE LA PAQUETERÍA
@@ -291,7 +293,6 @@ def get_carrier_status(tracking_company, tracking_number):
             "events": []
         }
 
-
 # =============================================================================
 # ENDPOINT PRINCIPAL: /track-order
 # =============================================================================
@@ -376,7 +377,6 @@ def track_order():
     }
 
     return jsonify(response_json)
-
 
 # =============================================================================
 # PUNTO DE ENTRADA DE LA APLICACIÓN
