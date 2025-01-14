@@ -258,20 +258,7 @@ def get_carrier_status(tracking_company, tracking_number):
     r.raise_for_status()
     dropin_data = r.json()
 
-    # EJEMPLO de respuesta (ajusta según la documentación de DropIn):
-    # {
-    #   "trackingNumber": "...",
-    #   "status": "En tránsito",
-    #   "events": [
-    #       {
-    #           "date": "2025-01-10T12:34:56",
-    #           "location": "CDMX",
-    #           "description": "Paquete recogido"
-    #       },
-    #       ...
-    #   ]
-    # }
-
+    # Procesar el estado retornado por DropIn
     raw_status = dropin_data.get("status", "").lower()
     if raw_status in ["en transito", "in_transit", "transit"]:
         status = "in_transit"
@@ -283,7 +270,7 @@ def get_carrier_status(tracking_company, tracking_number):
         status = "unknown"
         description = f"Estado desconocido: {raw_status}"
 
-    # Mapeamos los eventos
+    # Mapeamos los eventos proporcionados por la API de DropIn
     raw_events = dropin_data.get("events", [])
     events_list = []
     for ev in raw_events:
@@ -298,30 +285,6 @@ def get_carrier_status(tracking_company, tracking_number):
         "description": description,
         "events": events_list
     }
-
-        # -------------------------------------------------------
-        # OTROS CARRIERS (NO SOPORTADOS)
-        # -------------------------------------------------------
-        else:
-            return {
-                "status": "unknown",
-                "description": f"Paquetería no soportada: {tracking_company}",
-                "events": []
-            }
-
-    except requests.exceptions.HTTPError as http_err:
-        return {
-            "status": "error",
-            "description": f"Error HTTP: {http_err}",
-            "events": []
-        }
-    except requests.exceptions.RequestException as e:
-        return {
-            "status": "error",
-            "description": str(e),
-            "events": []
-        }
-
 # -------------------------------------------------------------------------
 # ENDPOINT PRINCIPAL: /track-order
 # -------------------------------------------------------------------------
