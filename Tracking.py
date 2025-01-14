@@ -244,8 +244,11 @@ def get_carrier_status(tracking_company, tracking_number):
         # -------------------------------------------------------
         # DROPIN
         # -------------------------------------------------------
-        elif "dropin" in carrier_normalized:
-    # Ajustar la URL según la documentación de DropIn
+        # -------------------------------------------------------
+# DROPIN O CARRIER "OTRO"
+# -------------------------------------------------------
+elif "dropin" in carrier_normalized or "otro" in carrier_normalized:
+    # Ajusta la URL al endpoint correcto según la documentación oficial de DropIn
     dropin_url = f"https://backend.dropin.com.mx/api/v1/tracking/{tracking_number}"
     headers = {
         "Authorization": f"Bearer {DROPIN_API_KEY}",
@@ -256,7 +259,7 @@ def get_carrier_status(tracking_company, tracking_number):
     r.raise_for_status()
     dropin_data = r.json()
 
-    # Procesar el estado retornado por DropIn según la estructura de la respuesta de la API
+    # Procesar el estado retornado por DropIn
     raw_status = dropin_data.get("status", "").lower()
     if raw_status in ["en transito", "in_transit", "transit"]:
         status = "in_transit"
