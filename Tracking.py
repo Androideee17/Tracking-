@@ -218,7 +218,7 @@ def get_carrier_status(tracking_company, tracking_number):
         else:
             dropin_url = f"https://backend.dropin.com.mx/api/v1/parcels/parcel/{tracking_number}"
             headers = {
-                "x-api-key": DROPIN_API_KEY,
+                "X-API-KEY": DROPIN_API_KEY,
                 "Accept": "application/json"
             }
             response = requests.get(dropin_url, headers=headers)
