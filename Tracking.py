@@ -144,8 +144,7 @@ def get_carrier_status(tracking_company, tracking_number):
         }
 
     # Normalizar el nombre del carrier, quitando espacios, guiones y pasando a minúsculas
-    carrier_normalized = tracking_company.strip().lower()
-    carrier_normalized = carrier_normalized.replace(" ", "").replace("-", "")
+    carrier_normalized = tracking_company.strip().lower().replace(" ", "").replace("-", "")
 
     try:
         # -------------------------------------------------------
@@ -189,7 +188,6 @@ def get_carrier_status(tracking_company, tracking_number):
                     "description": ev_description
                 })
 
-            # Mapear a in_transit, delivered, etc.
             if dhl_status_code in ["transit", "in_transit"]:
                 return {
                     "status": "in_transit",
@@ -242,50 +240,45 @@ def get_carrier_status(tracking_company, tracking_number):
                 }
 
         # -------------------------------------------------------
-        # DROPIN
+        # DROPIN O CARRIER "OTRO"
         # -------------------------------------------------------
-        # -------------------------------------------------------
-# DROPIN O CARRIER "OTRO"
-# -------------------------------------------------------
-elif "dropin" in carrier_normalized or "otro" in carrier_normalized:
-    # Ajusta la URL al endpoint correcto según la documentación oficial de DropIn
-    dropin_url = f"https://backend.dropin.com.mx/api/v1/tracking/{tracking_number}"
-    headers = {
-        "Authorization": f"Bearer {DROPIN_API_KEY}",
-        "x-api-key": DROPIN_API_KEY,
-        "Accept": "application/json"
-    }
-    r = requests.get(dropin_url, headers=headers)
-    r.raise_for_status()
-    dropin_data = r.json()
+        elif "dropin" in carrier_normalized or "otro" in carrier_normalized:
+            dropin_url = f"https://backend.dropin.com.mx/api/v1/tracking/{tracking_number}"
+            headers = {
+                "Authorization": f"Bearer {DROPIN_API_KEY}",
+                "x-api-key": DROPIN_API_KEY,
+                "Accept": "application/json"
+            }
+            r = requests.get(dropin_url, headers=headers)
+            r.raise_for_status()
+            dropin_data = r.json()
 
-    # Procesar el estado retornado por DropIn
-    raw_status = dropin_data.get("status", "").lower()
-    if raw_status in ["en transito", "in_transit", "transit"]:
-        status = "in_transit"
-        description = "En tránsito (DropIn)"
-    elif raw_status in ["entregado", "delivered"]:
-        status = "delivered"
-        description = "Entregado (DropIn)"
-    else:
-        status = "unknown"
-        description = f"Estado desconocido: {raw_status}"
+            raw_status = dropin_data.get("status", "").lower()
+            if raw_status in ["en transito", "in_transit", "transit"]:
+                status = "in_transit"
+                description = "En tránsito (DropIn)"
+            elif raw_status in ["entregado", "delivered"]:
+                status = "delivered"
+                description = "Entregado (DropIn)"
+            else:
+                status = "unknown"
+                description = f"Estado desconocido: {raw_status}"
 
-    # Mapeamos los eventos proporcionados por la API de DropIn
-    raw_events = dropin_data.get("events", [])
-    events_list = []
-    for ev in raw_events:
-        events_list.append({
-            "date": ev.get("date", ""),
-            "location": ev.get("location", ""),
-            "description": ev.get("description", "")
-        })
+            raw_events = dropin_data.get("events", [])
+            events_list = []
+            for ev in raw_events:
+                events_list.append({
+                    "date": ev.get("date", ""),
+                    "location": ev.get("location", ""),
+                    "description": ev.get("description", "")
+                })
 
-    return {
-        "status": status,
-        "description": description,
-        "events": events_list
-    }
+            return {
+                "status": status,
+                "description": description,
+                "events": events_list
+            }
+
         # -------------------------------------------------------
         # OTROS CARRIERS (NO SOPORTADOS)
         # -------------------------------------------------------
@@ -325,14 +318,12 @@ def track_order():
     if not order_number or not email:
         return jsonify({"error": "Número de pedido y correo son requeridos"}), 400
 
-    # 1. Obtenemos la orden desde Shopify
     shopify_order = get_order_from_shopify(order_number, email)
     if not shopify_order:
         return jsonify({"error": "Pedido no encontrado o el email no coincide"}), 404
     if "error" in shopify_order:
         return jsonify({"error": shopify_order["error"]}), 400
 
-    # 2. Extraer line items
     line_items_info = []
     for edge in shopify_order["lineItems"]["edges"]:
         node = edge["node"]
@@ -346,7 +337,6 @@ def track_order():
             "imageUrl": featured_image.get("url", "")
         })
 
-    # 3. Tomar tracking del fulfillment (si existe)
     tracking_number = None
     tracking_company = None
     fulfillments = shopify_order.get("fulfillments", [])
@@ -357,33 +347,26 @@ def track_order():
             tracking_number = tracking_info[0].get("number")
             tracking_company = tracking_info[0].get("company")
 
-    # 4. Consultar el estado con la paquetería
     carrier_status = get_carrier_status(tracking_company, tracking_number)
 
-    # 5. Mapeo a los 4 pasos (Pedido Recibido, Preparando, En Tránsito, Entregado)
-    step1_completed = True  # El pedido existe, así que el paso 1 está completo
-    step2_completed = bool(tracking_number and tracking_company)  # Preparando (si hay guía)
+    step1_completed = True
+    step2_completed = bool(tracking_number and tracking_company)
     step3_completed = (carrier_status["status"] == "in_transit" or carrier_status["status"] == "delivered")
     step4_completed = (carrier_status["status"] == "delivered")
 
-    # 6. Construimos la respuesta final
     response_json = {
         "name": shopify_order["name"],
         "email": shopify_order["email"],
-        "financialStatus": shopify_order["displayFinancialStatus"],  # Estado del pago
-        "fulfillmentStatus": shopify_order["displayFulfillmentStatus"],  # No se mostrará, pero se incluye
+        "financialStatus": shopify_order["displayFinancialStatus"],
+        "fulfillmentStatus": shopify_order["displayFulfillmentStatus"],
         "lineItems": line_items_info,
         "totalPrice": shopify_order["totalPriceSet"]["shopMoney"]["amount"],
         "currency": shopify_order["totalPriceSet"]["shopMoney"]["currencyCode"],
-
-        # Datos de tracking
         "trackingNumber": tracking_number,
         "trackingCompany": tracking_company,
         "currentCarrierStatus": carrier_status["status"],
         "carrierDescription": carrier_status["description"],
         "events": carrier_status.get("events", []),
-
-        # Pasos de la barra de progreso
         "progressSteps": {
             "step1": step1_completed,
             "step2": step2_completed,
