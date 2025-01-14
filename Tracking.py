@@ -11,7 +11,6 @@ import logging
 # -------------------------------------------------------------------------
 # CONFIGURACIÓN DE LOGGING
 # -------------------------------------------------------------------------
-# Ejemplo de formato de log: 2025-01-01 12:00:00,123 [INFO] Mensaje de log
 logging.basicConfig(
     level=logging.DEBUG,  # Nivel de detalle: DEBUG, INFO, WARNING, ERROR, CRITICAL
     format='%(asctime)s [%(levelname)s] %(message)s'
@@ -49,7 +48,6 @@ DROPIN_API_KEY = os.getenv("DROPIN_API_KEY")
 def get_order_from_shopify(order_name, email):
     logger.info("Obteniendo orden de Shopify para order_name='%s', email='%s'", order_name, email)
 
-    # Validación mínima de API Key de Shopify
     if not ACCESS_TOKEN or not SHOPIFY_STORE:
         logger.error("Faltan credenciales de Shopify (ACCESS_TOKEN o SHOPIFY_STORE).")
         return {"error": "Faltan credenciales de Shopify"}
@@ -141,9 +139,6 @@ def get_order_from_shopify(order_name, email):
 # FUNCIÓN: OBTENER ESTADO DE LA PAQUETERÍA
 # =============================================================================
 def get_carrier_status(tracking_company, tracking_number):
-    """
-    Consulta el estado de un paquete usando las APIs de DHL, Estafeta o DropIn.
-    """
     logger.info("Obteniendo estado de la paquetería. Empresa='%s', Número='%s'", tracking_company, tracking_number)
 
     if not tracking_number:
@@ -156,7 +151,6 @@ def get_carrier_status(tracking_company, tracking_number):
 
     carrier = tracking_company.strip().lower() if tracking_company else ""
 
-    # Validación mínima de API Keys
     if "dhl" in carrier and not DHL_API_KEY:
         logger.error("Falta DHL_API_KEY en entorno.")
         return {"status": "error", "description": "Faltan credenciales de DHL", "events": []}
@@ -168,9 +162,6 @@ def get_carrier_status(tracking_company, tracking_number):
         return {"status": "error", "description": "Faltan credenciales de DropIn", "events": []}
 
     try:
-        # --------------------------------------------------
-        # 1. Integración con DHL
-        # --------------------------------------------------
         if "dhl" in carrier:
             dhl_url = f"https://api-eu.dhl.com/track/shipments?trackingNumber={tracking_number}"
             headers = {
@@ -231,9 +222,6 @@ def get_carrier_status(tracking_company, tracking_number):
                     "events": events_list
                 }
 
-        # --------------------------------------------------
-        # 2. Integración con Estafeta
-        # --------------------------------------------------
         elif "estafeta" in carrier:
             estafeta_url = f"https://api.estafeta.com/v1/track/{tracking_number}"
             headers = {"Authorization": f"Bearer {ESTAFETA_API_KEY}"}
@@ -270,17 +258,15 @@ def get_carrier_status(tracking_company, tracking_number):
                     "events": events_list
                 }
 
-        # --------------------------------------------------
-        # 3. Integración con DropIn
-        # --------------------------------------------------
         else:
             dropin_url = f"https://backend.dropin.com.mx/api/v1/parcels/parcel/{tracking_number}"
+            # Modificación: Se utiliza encabezado Authorization Bearer para DropIn
             headers = {
-                "X-API-KEY": DROPIN_API_KEY,
+                "Authorization": f"Bearer {DROPIN_API_KEY}",
                 "Accept": "application/json"
             }
             logger.debug("URL DropIn: %s", dropin_url)
-            logger.debug("Headers DropIn (ocultando API Key en producción): %s", {k: (v if k != "X-API-KEY" else "*****") for k, v in headers.items()})
+            logger.debug("Headers DropIn (ocultando API Key en producción): %s", {k: (v if k != "Authorization" else "*****") for k, v in headers.items()})
 
             response = requests.get(dropin_url, headers=headers)
             logger.debug("Respuesta DropIn: %s", response.text)
@@ -350,12 +336,10 @@ def track_order():
     order_number = data.get("orderNumber")
     email = data.get("email")
 
-    # Validación de campos
     if not order_number or not email:
         logger.warning("Faltan campos obligatorios: orderNumber=%s, email=%s", order_number, email)
         return jsonify({"error": "Número de pedido y correo son requeridos"}), 400
 
-    # Llamar a la función para obtener la orden de Shopify
     logger.info("Obteniendo información de la orden en Shopify.")
     shopify_order = get_order_from_shopify(order_number, email)
     if not shopify_order:
@@ -365,7 +349,6 @@ def track_order():
         logger.error("Shopify retornó un error: %s", shopify_order["error"])
         return jsonify({"error": shopify_order["error"]}), 400
 
-    # Procesar lineItems
     line_items_info = []
     for edge in shopify_order["lineItems"]["edges"]:
         node = edge["node"]
@@ -379,7 +362,6 @@ def track_order():
             "imageUrl": featured_image.get("url", "")
         })
 
-    # Obtener datos de tracking
     fulfillments = shopify_order.get("fulfillments", [])
     tracking_number = None
     tracking_company = None
@@ -394,7 +376,6 @@ def track_order():
     logger.info("Tracking: empresa='%s', número='%s'", tracking_company, tracking_number)
     carrier_status = get_carrier_status(tracking_company, tracking_number)
 
-    # Construcción de "progress steps"
     step1_completed = True
     step2_completed = bool(tracking_number and tracking_company)
     step3_completed = (carrier_status["status"] == "in_transit" or carrier_status["status"] == "delivered")
