@@ -22,9 +22,9 @@ CORS(app, origins="*")  # Permite solicitudes desde cualquier dominio
 # CONFIGURACIÓN DE SHOPIFY DESDE VARIABLES DE ENTORNO
 # -------------------------------------------------------------------------
 SHOPIFY_STORE = os.getenv("SHOPIFY_STORE")
-API_KEY = os.getenv("API_KEY")                    
-API_SECRET_KEY = os.getenv("API_SECRET_KEY")      
-ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")          
+API_KEY = os.getenv("API_KEY")
+API_SECRET_KEY = os.getenv("API_SECRET_KEY")
+ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 API_URL = f"https://{SHOPIFY_STORE}/admin/api/2023-10/graphql.json"
 
 # -------------------------------------------------------------------------
@@ -33,7 +33,7 @@ API_URL = f"https://{SHOPIFY_STORE}/admin/api/2023-10/graphql.json"
 DHL_API_KEY = os.getenv("DHL_API_KEY")
 DHL_API_SECRET = os.getenv("DHL_API_SECRET")
 ESTAFETA_API_KEY = os.getenv("ESTAFETA_API_KEY")
-DROPIN_API_KEY = os.getenv("DROPIN_API_KEY")  
+DROPIN_API_KEY = os.getenv("DROPIN_API_KEY")
 
 # -------------------------------------------------------------------------
 # FUNCIÓN: OBTENER ORDEN DE SHOPIFY (GraphQL)
@@ -83,20 +83,16 @@ def get_order_from_shopify(order_name, email):
         response = requests.post(API_URL, json={"query": query, "variables": variables}, headers=headers)
         response.raise_for_status()
         data = response.json()
-
         if "errors" in data:
             return {"error": data["errors"]}
-
         orders_edges = data.get("data", {}).get("orders", {}).get("edges", [])
         if not orders_edges:
             return None
-
         for order_edge in orders_edges:
             node = order_edge["node"]
             if node["email"].lower() == email.lower():
                 return node
         return None
-
     except requests.exceptions.HTTPError as http_err:
         return {"error": f"HTTP Error: {http_err.response.status_code} - {http_err.response.text}"}
     except requests.exceptions.RequestException as e:
@@ -110,7 +106,8 @@ def get_carrier_status(tracking_company, tracking_number):
         return {
             "status": "no_tracking",
             "description": "No hay tracking asignado",
-            "events": []
+            "events": [],
+            "source": None
         }
 
     carrier_normalized = tracking_company.strip().lower().replace(" ", "").replace("-", "")
@@ -128,7 +125,7 @@ def get_carrier_status(tracking_company, tracking_number):
 
             shipments = dhl_data.get("shipments", [])
             if not shipments:
-                return { "status": "unknown", "description": "No se encontró información en DHL", "events": [] }
+                return { "status": "unknown", "description": "No se encontró información en DHL", "events": [], "source": "DHL" }
 
             shipment_info = shipments[0]
             status_info = shipment_info.get("status", {})
@@ -145,11 +142,11 @@ def get_carrier_status(tracking_company, tracking_number):
                 })
 
             if dhl_status_code in ["transit", "in_transit"]:
-                return { "status": "in_transit", "description": dhl_status_desc, "events": events_list }
+                return { "status": "in_transit", "description": dhl_status_desc, "events": events_list, "source": "DHL" }
             elif dhl_status_code == "delivered":
-                return { "status": "delivered", "description": dhl_status_desc, "events": events_list }
+                return { "status": "delivered", "description": dhl_status_desc, "events": events_list, "source": "DHL" }
             else:
-                return { "status": "unknown", "description": dhl_status_desc, "events": events_list }
+                return { "status": "unknown", "description": dhl_status_desc, "events": events_list, "source": "DHL" }
 
         # -------------------------------------------------------
         # ESTAFETA
@@ -165,11 +162,11 @@ def get_carrier_status(tracking_company, tracking_number):
             events_list = estafeta_data.get("events", [])
 
             if status == "in_transit":
-                return { "status": "in_transit", "description": "En tránsito (Estafeta)", "events": events_list }
+                return { "status": "in_transit", "description": "En tránsito (Estafeta)", "events": events_list, "source": "Estafeta" }
             elif status == "delivered":
-                return { "status": "delivered", "description": "Entregado (Estafeta)", "events": events_list }
+                return { "status": "delivered", "description": "Entregado (Estafeta)", "events": events_list, "source": "Estafeta" }
             else:
-                return { "status": "unknown", "description": f"Estado desconocido: {status}", "events": events_list }
+                return { "status": "unknown", "description": f"Estado desconocido: {status}", "events": events_list, "source": "Estafeta" }
 
         # -------------------------------------------------------
         # DROPIN como valor por defecto
@@ -205,12 +202,17 @@ def get_carrier_status(tracking_company, tracking_number):
                     "description": ev.get("description", "")
                 })
 
-            return { "status": status, "description": description, "events": events_list }
+            return { 
+                "status": status, 
+                "description": description, 
+                "events": events_list,
+                "source": "DropIn" 
+            }
 
     except requests.exceptions.HTTPError as http_err:
-        return { "status": "error", "description": f"Error HTTP: {http_err}", "events": [] }
+        return { "status": "error", "description": f"Error HTTP: {http_err}", "events": [], "source": None }
     except requests.exceptions.RequestException as e:
-        return { "status": "error", "description": str(e), "events": [] }
+        return { "status": "error", "description": str(e), "events": [], "source": None }
 
 # -------------------------------------------------------------------------
 # ENDPOINT PRINCIPAL: /track-order
@@ -273,6 +275,7 @@ def track_order():
         "currentCarrierStatus": carrier_status["status"],
         "carrierDescription": carrier_status["description"],
         "events": carrier_status.get("events", []),
+        "source": carrier_status.get("source", ""),
         "progressSteps": {
             "step1": step1_completed,
             "step2": step2_completed,
