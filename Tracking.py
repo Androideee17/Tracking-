@@ -112,6 +112,9 @@ def get_order_from_shopify(order_name, email):
 # FUNCIÓN: OBTENER ESTADO DE LA PAQUETERÍA
 # =============================================================================
 def get_carrier_status(tracking_company, tracking_number):
+    """
+    Consulta el estado de un paquete usando las APIs de DHL, Estafeta o DropIn.
+    """
     if not tracking_number:
         return {
             "status": "no_tracking",
@@ -131,9 +134,9 @@ def get_carrier_status(tracking_company, tracking_number):
                 "DHL-API-Key": DHL_API_KEY,
                 "Accept": "application/json"
             }
-            r = requests.get(dhl_url, headers=headers)
-            r.raise_for_status()
-            dhl_data = r.json()
+            response = requests.get(dhl_url, headers=headers)
+            response.raise_for_status()
+            dhl_data = response.json()
 
             shipments = dhl_data.get("shipments", [])
             if not shipments:
@@ -149,18 +152,14 @@ def get_carrier_status(tracking_company, tracking_number):
             dhl_status_desc = status_info.get("description", "Sin descripción")
 
             events_data = shipment_info.get("events", [])
-            events_list = []
-            for ev in events_data:
-                timestamp = ev.get("timestamp", "")
-                location_obj = ev.get("location", {})
-                address_obj = location_obj.get("address", {})
-                locality = address_obj.get("addressLocality", "")
-                ev_description = ev.get("description", "")
-                events_list.append({
-                    "date": timestamp,
-                    "location": locality,
-                    "description": ev_description
-                })
+            events_list = [
+                {
+                    "date": ev.get("timestamp", ""),
+                    "location": ev.get("location", {}).get("address", {}).get("addressLocality", ""),
+                    "description": ev.get("description", "")
+                }
+                for ev in events_data
+            ]
 
             if dhl_status_code in ["transit", "in_transit"]:
                 return {
@@ -187,9 +186,9 @@ def get_carrier_status(tracking_company, tracking_number):
         elif "estafeta" in carrier:
             estafeta_url = f"https://api.estafeta.com/v1/track/{tracking_number}"
             headers = {"Authorization": f"Bearer {ESTAFETA_API_KEY}"}
-            r = requests.get(estafeta_url, headers=headers)
-            r.raise_for_status()
-            estafeta_data = r.json()
+            response = requests.get(estafeta_url, headers=headers)
+            response.raise_for_status()
+            estafeta_data = response.json()
 
             status = estafeta_data.get("current_status", "unknown").lower()
             events_list = estafeta_data.get("events", [])
@@ -214,35 +213,31 @@ def get_carrier_status(tracking_company, tracking_number):
                 }
 
         # --------------------------------------------------
-        # 3. Integración por defecto: DropIn
+        # 3. Integración con DropIn
         # --------------------------------------------------
         else:
-            # Uso del endpoint con parámetro de consulta según la documentación
-            dropin_url = f"https://backend.dropin.com.mx/api/v1/shipments?trackingNumber={tracking_number}"
+            dropin_url = f"https://backend.dropin.com.mx/api/v1/parcels/parcel/{tracking_number}"
             headers = {
                 "x-api-key": DROPIN_API_KEY,
                 "Accept": "application/json"
             }
-            r = requests.get(dropin_url, headers=headers)
-            r.raise_for_status()
-            dropin_data = r.json()
+            response = requests.get(dropin_url, headers=headers)
+            response.raise_for_status()
+            dropin_data = response.json()
 
-            # Procesamiento de la respuesta según la estructura esperada por la API
             data_obj = dropin_data.get("data", {})
             attributes = data_obj.get("attributes", {})
             dropin_status = attributes.get("status", "unknown").lower()
             history = attributes.get("history", [])
 
-            events_list = []
-            for ev in history:
-                event_date = ev.get("updated_at", "")
-                event_location = ev.get("location", "Sin ubicación")
-                event_description = ev.get("description", "Sin descripción")
-                events_list.append({
-                    "date": event_date,
-                    "location": event_location,
-                    "description": event_description
-                })
+            events_list = [
+                {
+                    "date": ev.get("updated_at", ""),
+                    "location": ev.get("location", "Sin ubicación"),
+                    "description": ev.get("description", "Sin descripción")
+                }
+                for ev in history
+            ]
 
             if dropin_status in ["in_transit", "out_for_delivery"]:
                 return {
@@ -347,6 +342,9 @@ def track_order():
 
     return jsonify(response_json)
 
+# =============================================================================
+# PUNTO DE ENTRADA DE LA APLICACIÓN
+# =============================================================================
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
