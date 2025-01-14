@@ -245,56 +245,59 @@ def get_carrier_status(tracking_company, tracking_number):
         # DROPIN
         # -------------------------------------------------------
         elif "dropin" in carrier_normalized:
-            # Ajusta la URL al endpoint correcto según la doc oficial
-            dropin_url = f"https://backend.dropin.com.mx/api/v1/track/{tracking_number}"
-            headers = {"Authorization": f"Bearer {DROPIN_API_KEY}"}
-                "x-api-key": DROPIN_API_KEY,
-                "Accept": "application/json"
-            }
-            r = requests.get(dropin_url, headers=headers)
-            r.raise_for_status()
-            dropin_data = r.json()
+    # Ajusta la URL al endpoint correcto según la documentación oficial de DropIn
+    dropin_url = f"https://backend.dropin.com.mx/api/v1/track/{tracking_number}"
+    headers = {
+        # Si la API de DropIn requiere autenticación Bearer junto con x-api-key, inclúyelos.
+        # Si solo requiere uno de ellos, ajusta en consecuencia.
+        "Authorization": f"Bearer {DROPIN_API_KEY}",
+        "x-api-key": DROPIN_API_KEY,
+        "Accept": "application/json"
+    }
+    r = requests.get(dropin_url, headers=headers)
+    r.raise_for_status()
+    dropin_data = r.json()
 
-            # EJEMPLO de respuesta (ajusta según tu doc de DropIn):
-            # {
-            #   "trackingNumber": "...",
-            #   "status": "En tránsito",
-            #   "events": [
-            #       {
-            #           "date": "2025-01-10T12:34:56",
-            #           "location": "CDMX",
-            #           "description": "Paquete recogido"
-            #       },
-            #       ...
-            #   ]
-            # }
+    # EJEMPLO de respuesta (ajusta según la documentación de DropIn):
+    # {
+    #   "trackingNumber": "...",
+    #   "status": "En tránsito",
+    #   "events": [
+    #       {
+    #           "date": "2025-01-10T12:34:56",
+    #           "location": "CDMX",
+    #           "description": "Paquete recogido"
+    #       },
+    #       ...
+    #   ]
+    # }
 
-            raw_status = dropin_data.get("status", "").lower()
-            if raw_status in ["en transito", "in_transit", "transit"]:
-                status = "in_transit"
-                description = "En tránsito (DropIn)"
-            elif raw_status in ["entregado", "delivered"]:
-                status = "delivered"
-                description = "Entregado (DropIn)"
-            else:
-                status = "unknown"
-                description = f"Estado desconocido: {raw_status}"
+    raw_status = dropin_data.get("status", "").lower()
+    if raw_status in ["en transito", "in_transit", "transit"]:
+        status = "in_transit"
+        description = "En tránsito (DropIn)"
+    elif raw_status in ["entregado", "delivered"]:
+        status = "delivered"
+        description = "Entregado (DropIn)"
+    else:
+        status = "unknown"
+        description = f"Estado desconocido: {raw_status}"
 
-            # Mapeamos los eventos
-            raw_events = dropin_data.get("events", [])
-            events_list = []
-            for ev in raw_events:
-                events_list.append({
-                    "date": ev.get("date", ""),
-                    "location": ev.get("location", ""),
-                    "description": ev.get("description", "")
-                })
+    # Mapeamos los eventos
+    raw_events = dropin_data.get("events", [])
+    events_list = []
+    for ev in raw_events:
+        events_list.append({
+            "date": ev.get("date", ""),
+            "location": ev.get("location", ""),
+            "description": ev.get("description", "")
+        })
 
-            return {
-                "status": status,
-                "description": description,
-                "events": events_list
-            }
+    return {
+        "status": status,
+        "description": description,
+        "events": events_list
+    }
 
         # -------------------------------------------------------
         # OTROS CARRIERS (NO SOPORTADOS)
