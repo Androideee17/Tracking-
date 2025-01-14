@@ -246,95 +246,42 @@ def get_carrier_status(tracking_company, tracking_number):
         # 3. Integración actualizada con DropIn
         # --------------------------------------------------
         elif "dropin" in carrier:
-            # Endpoint real según documentación
-            dropin_url = f"https://backend.dropin.com.mx/api/v1/shipments/{tracking_number}"
-            headers = {
-                "x-api-key": DROPIN_API_KEY,
-                "Accept": "application/json"
-            }
-            r = requests.get(dropin_url, headers=headers)
-            r.raise_for_status()
-            dropin_data = r.json()
+    # Usar el endpoint y autenticación correctos para DropIn
+    dropin_url = f"https://api.dropin.com.mx/v1/trackings/{tracking_number}"
+    headers = {"Authorization": f"Bearer {DROPIN_API_KEY}"}
+    r = requests.get(dropin_url, headers=headers)
+    r.raise_for_status()
+    dropin_data = r.json()
 
-            # Ajustar según la estructura real que devuelva DropIn
-            # Ejemplo basado en: 
-            # {
-            #   "data": {
-            #     "id": "...",
-            #     "type": "shipment",
-            #     "attributes": {
-            #       "status": "in_transit",
-            #       "history": [
-            #         {
-            #           "location": "CDMX",
-            #           "description": "Pedido recogido",
-            #           "updated_at": "2025-01-10T10:30:00Z"
-            #         }, ...
-            #       ]
-            #     }
-            #   }
-            # }
+    # Extraer el estado y los eventos de la respuesta de DropIn
+    status = dropin_data.get("status", "unknown").lower()
+    events_data = dropin_data.get("events", [])
+    events_list = []
+    for ev in events_data:
+        events_list.append({
+            "date": ev.get("date", ""),
+            "location": ev.get("location", ""),
+            "description": ev.get("description", "")
+        })
 
-            data_obj = dropin_data.get("data", {})
-            attributes = data_obj.get("attributes", {})
-            dropin_status = attributes.get("status", "unknown").lower()
-            history = attributes.get("history", [])
-
-            # Construir lista de eventos en el formato esperado
-            events_list = []
-            for ev in history:
-                # Ajusta los campos según la respuesta real
-                event_date = ev.get("updated_at", "")
-                event_location = ev.get("location", "Sin ubicación")
-                event_description = ev.get("description", "Sin descripción")
-
-                events_list.append({
-                    "date": event_date,
-                    "location": event_location,
-                    "description": event_description
-                })
-
-            # Mapeo del estado
-            if dropin_status in ["in_transit", "out_for_delivery"]:
-                return {
-                    "status": "in_transit",
-                    "description": "En tránsito (DropIn)",
-                    "events": events_list
-                }
-            elif dropin_status == "delivered":
-                return {
-                    "status": "delivered",
-                    "description": "Entregado (DropIn)",
-                    "events": events_list
-                }
-            else:
-                return {
-                    "status": "unknown",
-                    "description": f"Estado desconocido: {dropin_status}",
-                    "events": events_list
-                }
-
-        # --------------------------------------------------
-        # Paquetería desconocida/no soportada
-        # --------------------------------------------------
-        else:
-            return {
-                "status": "unknown",
-                "description": f"Paquetería no soportada: {tracking_company}",
-                "events": []
-            }
-
-    except requests.exceptions.HTTPError as http_err:
+    # Mapear el estado devuelto por DropIn a los estados esperados
+    if status == "in_transit":
         return {
-            "status": "error",
-            "description": f"Error HTTP: {http_err}",
-            "events": []
+            "status": "in_transit",
+            "description": "En tránsito (Dropin)",
+            "events": events_list
         }
-    except requests.exceptions.RequestException as e:
+    elif status == "delivered":
         return {
-            "status": "error",
-            "description": str(e),
-            "events": []
+            "status": "delivered",
+            "description": "Entregado (Dropin)",
+            "events": events_list
+        }
+    else:
+        return {
+            "status": "unknown",
+            "description": f"Estado desconocido: {status}",
+            "events": events_list
         }
 
 # =============================================================================
