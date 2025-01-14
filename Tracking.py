@@ -247,7 +247,7 @@ def get_carrier_status(tracking_company, tracking_number):
         elif "dropin" in carrier_normalized:
             # Ajusta la URL al endpoint correcto según la doc oficial
             dropin_url = f"https://backend.dropin.com.mx/api/v1/track/{tracking_number}"
-            headers = {
+            headers = {"Authorization": f"Bearer {DROPIN_API_KEY}"}
                 "x-api-key": DROPIN_API_KEY,
                 "Accept": "application/json"
             }
