@@ -22,9 +22,9 @@ CORS(app, origins="*")  # Permite solicitudes desde cualquier dominio
 # CONFIGURACIÓN DE SHOPIFY DESDE VARIABLES DE ENTORNO
 # -------------------------------------------------------------------------
 SHOPIFY_STORE = os.getenv("SHOPIFY_STORE")
-API_KEY = os.getenv("API_KEY")                    # Sólo si usas OAuth
-API_SECRET_KEY = os.getenv("API_SECRET_KEY")      # Sólo si usas OAuth
-ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")          # Token con permisos
+API_KEY = os.getenv("API_KEY")                    
+API_SECRET_KEY = os.getenv("API_SECRET_KEY")      
+ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")          
 API_URL = f"https://{SHOPIFY_STORE}/admin/api/2023-10/graphql.json"
 
 # -------------------------------------------------------------------------
@@ -33,16 +33,12 @@ API_URL = f"https://{SHOPIFY_STORE}/admin/api/2023-10/graphql.json"
 DHL_API_KEY = os.getenv("DHL_API_KEY")
 DHL_API_SECRET = os.getenv("DHL_API_SECRET")
 ESTAFETA_API_KEY = os.getenv("ESTAFETA_API_KEY")
-DROPIN_API_KEY = os.getenv("DROPIN_API_KEY")  # Ejemplo: "d07316b6..."
+DROPIN_API_KEY = os.getenv("DROPIN_API_KEY")  
 
 # -------------------------------------------------------------------------
 # FUNCIÓN: OBTENER ORDEN DE SHOPIFY (GraphQL)
 # -------------------------------------------------------------------------
 def get_order_from_shopify(order_name, email):
-    """
-    Realiza una consulta GraphQL a Shopify para obtener los datos del pedido.
-    Verifica también que el email coincida con el de la orden.
-    """
     query = """
     query ($name: String!) {
       orders(first: 1, query: $name) {
@@ -60,25 +56,17 @@ def get_order_from_shopify(order_name, email):
                   quantity
                   variant {
                     product {
-                      featuredImage {
-                        url
-                      }
+                      featuredImage { url }
                     }
                   }
                 }
               }
             }
             totalPriceSet {
-              shopMoney {
-                amount
-                currencyCode
-              }
+              shopMoney { amount currencyCode }
             }
             fulfillments(first: 5) {
-              trackingInfo {
-                number
-                company
-              }
+              trackingInfo { number company }
             }
           }
         }
@@ -86,7 +74,6 @@ def get_order_from_shopify(order_name, email):
     }
     """
     variables = {"name": f"name:{order_name}"}
-
     headers = {
         "Content-Type": "application/json",
         "X-Shopify-Access-Token": ACCESS_TOKEN
@@ -104,12 +91,10 @@ def get_order_from_shopify(order_name, email):
         if not orders_edges:
             return None
 
-        # Busca el pedido que coincida con el email
         for order_edge in orders_edges:
             node = order_edge["node"]
             if node["email"].lower() == email.lower():
                 return node
-
         return None
 
     except requests.exceptions.HTTPError as http_err:
@@ -121,21 +106,6 @@ def get_order_from_shopify(order_name, email):
 # FUNCIÓN: OBTENER ESTADO DE LA PAQUETERÍA
 # -------------------------------------------------------------------------
 def get_carrier_status(tracking_company, tracking_number):
-    """
-    Consulta la API de la paquetería (DHL, Estafeta, DropIn...) para obtener estado y eventos.
-    Retorna un diccionario con:
-      {
-        "status": "in_transit" | "delivered" | "unknown" | "error" | "no_tracking",
-        "description": "Texto o descripción",
-        "events": [
-            {
-                "date": "YYYY-MM-DD HH:MM:SS",
-                "location": "Ubicación",
-                "description": "Evento"
-            }, ...
-        ]
-      }
-    """
     if not tracking_company or not tracking_number:
         return {
             "status": "no_tracking",
@@ -143,7 +113,6 @@ def get_carrier_status(tracking_company, tracking_number):
             "events": []
         }
 
-    # Normalizar el nombre del carrier, quitando espacios, guiones y pasando a minúsculas
     carrier_normalized = tracking_company.strip().lower().replace(" ", "").replace("-", "")
 
     try:
@@ -152,67 +121,42 @@ def get_carrier_status(tracking_company, tracking_number):
         # -------------------------------------------------------
         if "dhl" in carrier_normalized:
             dhl_url = f"https://api-eu.dhl.com/track/shipments?trackingNumber={tracking_number}"
-            headers = {
-                "DHL-API-Key": DHL_API_KEY,
-                "Accept": "application/json"
-            }
+            headers = { "DHL-API-Key": DHL_API_KEY, "Accept": "application/json" }
             r = requests.get(dhl_url, headers=headers)
             r.raise_for_status()
             dhl_data = r.json()
 
             shipments = dhl_data.get("shipments", [])
             if not shipments:
-                return {
-                    "status": "unknown",
-                    "description": "No se encontró información en DHL",
-                    "events": []
-                }
+                return { "status": "unknown", "description": "No se encontró información en DHL", "events": [] }
 
             shipment_info = shipments[0]
             status_info = shipment_info.get("status", {})
             dhl_status_code = status_info.get("statusCode", "unknown").lower()
             dhl_status_desc = status_info.get("description", "Sin descripción")
 
-            # Historial de eventos
             events_data = shipment_info.get("events", [])
             events_list = []
             for ev in events_data:
-                timestamp = ev.get("timestamp", "")
-                location_obj = ev.get("location", {})
-                address_obj = location_obj.get("address", {})
-                locality = address_obj.get("addressLocality", "")
-                ev_description = ev.get("description", "")
                 events_list.append({
-                    "date": timestamp,
-                    "location": locality,
-                    "description": ev_description
+                    "date": ev.get("timestamp", ""),
+                    "location": ev.get("location", {}).get("address", {}).get("addressLocality", ""),
+                    "description": ev.get("description", "")
                 })
 
             if dhl_status_code in ["transit", "in_transit"]:
-                return {
-                    "status": "in_transit",
-                    "description": dhl_status_desc,
-                    "events": events_list
-                }
+                return { "status": "in_transit", "description": dhl_status_desc, "events": events_list }
             elif dhl_status_code == "delivered":
-                return {
-                    "status": "delivered",
-                    "description": dhl_status_desc,
-                    "events": events_list
-                }
+                return { "status": "delivered", "description": dhl_status_desc, "events": events_list }
             else:
-                return {
-                    "status": "unknown",
-                    "description": dhl_status_desc,
-                    "events": events_list
-                }
+                return { "status": "unknown", "description": dhl_status_desc, "events": events_list }
 
         # -------------------------------------------------------
         # ESTAFETA
         # -------------------------------------------------------
         elif "estafeta" in carrier_normalized:
             estafeta_url = f"https://api.estafeta.com/v1/track/{tracking_number}"
-            headers = {"Authorization": f"Bearer {ESTAFETA_API_KEY}"}
+            headers = { "Authorization": f"Bearer {ESTAFETA_API_KEY}" }
             r = requests.get(estafeta_url, headers=headers)
             r.raise_for_status()
             estafeta_data = r.json()
@@ -221,28 +165,16 @@ def get_carrier_status(tracking_company, tracking_number):
             events_list = estafeta_data.get("events", [])
 
             if status == "in_transit":
-                return {
-                    "status": "in_transit",
-                    "description": "En tránsito (Estafeta)",
-                    "events": events_list
-                }
+                return { "status": "in_transit", "description": "En tránsito (Estafeta)", "events": events_list }
             elif status == "delivered":
-                return {
-                    "status": "delivered",
-                    "description": "Entregado (Estafeta)",
-                    "events": events_list
-                }
+                return { "status": "delivered", "description": "Entregado (Estafeta)", "events": events_list }
             else:
-                return {
-                    "status": "unknown",
-                    "description": f"Estado desconocido: {status}",
-                    "events": events_list
-                }
+                return { "status": "unknown", "description": f"Estado desconocido: {status}", "events": events_list }
 
         # -------------------------------------------------------
-        # DROPIN O CARRIER "OTRO"
+        # DROPIN como valor por defecto
         # -------------------------------------------------------
-        elif "dropin" in carrier_normalized or "otro" in carrier_normalized:
+        else:
             dropin_url = f"https://backend.dropin.com.mx/api/v1/tracking/{tracking_number}"
             headers = {
                 "Authorization": f"Bearer {DROPIN_API_KEY}",
@@ -273,44 +205,18 @@ def get_carrier_status(tracking_company, tracking_number):
                     "description": ev.get("description", "")
                 })
 
-            return {
-                "status": status,
-                "description": description,
-                "events": events_list
-            }
-
-        # -------------------------------------------------------
-        # OTROS CARRIERS (NO SOPORTADOS)
-        # -------------------------------------------------------
-        else:
-            return {
-                "status": "unknown",
-                "description": f"Paquetería no soportada: {tracking_company}",
-                "events": []
-            }
+            return { "status": status, "description": description, "events": events_list }
 
     except requests.exceptions.HTTPError as http_err:
-        return {
-            "status": "error",
-            "description": f"Error HTTP: {http_err}",
-            "events": []
-        }
+        return { "status": "error", "description": f"Error HTTP: {http_err}", "events": [] }
     except requests.exceptions.RequestException as e:
-        return {
-            "status": "error",
-            "description": str(e),
-            "events": []
-        }
+        return { "status": "error", "description": str(e), "events": [] }
 
 # -------------------------------------------------------------------------
 # ENDPOINT PRINCIPAL: /track-order
 # -------------------------------------------------------------------------
 @app.route("/track-order", methods=["POST"])
 def track_order():
-    """
-    Endpoint POST para consultar la información de un pedido de Shopify
-    y su estado de envío (tracking) con la paquetería correspondiente.
-    """
     data = request.json
     order_number = data.get("orderNumber")
     email = data.get("email")
