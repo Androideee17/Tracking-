@@ -260,9 +260,9 @@ def get_carrier_status(tracking_company, tracking_number):
 
         else:
             dropin_url = f"https://backend.dropin.com.mx/api/v1/parcels/parcel/{tracking_number}"
-            # Modificación: Se utiliza encabezado Authorization Bearer para DropIn
+            # Actualización: se usa el esquema "DropIn" en el encabezado Authorization
             headers = {
-                "Authorization": f"Bearer {DROPIN_API_KEY}",
+                "Authorization": f"DropIn {DROPIN_API_KEY}",
                 "Accept": "application/json"
             }
             logger.debug("URL DropIn: %s", dropin_url)
