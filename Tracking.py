@@ -2,10 +2,7 @@
 # IMPORTACIONES
 # -------------------------------------------------------------------------
 from flask import Flask, request, jsonify
-# =============================================================================
-# CAMBIO 2: Se importa y configura Flask-CORS permitiendo origins="*"
-# =============================================================================
-from flask_cors import CORS  
+from flask_cors import CORS
 import requests
 import os
 from dotenv import load_dotenv  # Para cargar variables de entorno desde .env
@@ -19,32 +16,28 @@ load_dotenv()
 # INICIALIZACIÓN DE FLASK
 # -------------------------------------------------------------------------
 app = Flask(__name__)
-
-# =============================================================================
-# CAMBIO 2 (continuación): Configuramos CORS para permitir cualquier origen
-# =============================================================================
 CORS(app, origins="*")  # Permite solicitudes desde cualquier dominio
 
-# =============================================================================
+# -------------------------------------------------------------------------
 # CONFIGURACIÓN DE SHOPIFY DESDE VARIABLES DE ENTORNO
-# =============================================================================
+# -------------------------------------------------------------------------
 SHOPIFY_STORE = os.getenv("SHOPIFY_STORE")
 API_KEY = os.getenv("API_KEY")                    # Sólo si usas OAuth
 API_SECRET_KEY = os.getenv("API_SECRET_KEY")      # Sólo si usas OAuth
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")          # Token con permisos
 API_URL = f"https://{SHOPIFY_STORE}/admin/api/2023-10/graphql.json"
 
-# =============================================================================
+# -------------------------------------------------------------------------
 # CREDENCIALES DE PAQUETERÍAS DESDE VARIABLES DE ENTORNO
-# =============================================================================
+# -------------------------------------------------------------------------
 DHL_API_KEY = os.getenv("DHL_API_KEY")
 DHL_API_SECRET = os.getenv("DHL_API_SECRET")
 ESTAFETA_API_KEY = os.getenv("ESTAFETA_API_KEY")
-DROPIN_API_KEY = os.getenv("DROPIN_API_KEY")
+DROPIN_API_KEY = os.getenv("DROPIN_API_KEY")  # Ejemplo: "d07316b6..."
 
-# =============================================================================
+# -------------------------------------------------------------------------
 # FUNCIÓN: OBTENER ORDEN DE SHOPIFY (GraphQL)
-# =============================================================================
+# -------------------------------------------------------------------------
 def get_order_from_shopify(order_name, email):
     """
     Realiza una consulta GraphQL a Shopify para obtener los datos del pedido.
@@ -124,12 +117,12 @@ def get_order_from_shopify(order_name, email):
     except requests.exceptions.RequestException as e:
         return {"error": str(e)}
 
-# =============================================================================
+# -------------------------------------------------------------------------
 # FUNCIÓN: OBTENER ESTADO DE LA PAQUETERÍA
-# =============================================================================
+# -------------------------------------------------------------------------
 def get_carrier_status(tracking_company, tracking_number):
     """
-    Consulta la API de la paquetería (DHL, Estafeta, Dropin...) para obtener estado y eventos.
+    Consulta la API de la paquetería (DHL, Estafeta, DropIn...) para obtener estado y eventos.
     Retorna un diccionario con:
       {
         "status": "in_transit" | "delivered" | "unknown" | "error" | "no_tracking",
@@ -150,11 +143,15 @@ def get_carrier_status(tracking_company, tracking_number):
             "events": []
         }
 
-    carrier = tracking_company.strip().lower()
+    # Normalizar el nombre del carrier, quitando espacios, guiones y pasando a minúsculas
+    carrier_normalized = tracking_company.strip().lower()
+    carrier_normalized = carrier_normalized.replace(" ", "").replace("-", "")
 
     try:
-        # Ejemplo de integración con DHL
-        if "dhl" in carrier:
+        # -------------------------------------------------------
+        # DHL
+        # -------------------------------------------------------
+        if "dhl" in carrier_normalized:
             dhl_url = f"https://api-eu.dhl.com/track/shipments?trackingNumber={tracking_number}"
             headers = {
                 "DHL-API-Key": DHL_API_KEY,
@@ -212,8 +209,10 @@ def get_carrier_status(tracking_company, tracking_number):
                     "events": events_list
                 }
 
-        elif "estafeta" in carrier:
-            # Ejemplo placeholder Estafeta
+        # -------------------------------------------------------
+        # ESTAFETA
+        # -------------------------------------------------------
+        elif "estafeta" in carrier_normalized:
             estafeta_url = f"https://api.estafeta.com/v1/track/{tracking_number}"
             headers = {"Authorization": f"Bearer {ESTAFETA_API_KEY}"}
             r = requests.get(estafeta_url, headers=headers)
@@ -242,38 +241,65 @@ def get_carrier_status(tracking_company, tracking_number):
                     "events": events_list
                 }
 
-        elif "dropin" in carrier:
-            # Ejemplo placeholder Dropin
-            dropin_url = f"https://api.dropin.com.mx/v1/trackings/{tracking_number}"
-            headers = {"Authorization": f"Bearer {DROPIN_API_KEY}"}
+        # -------------------------------------------------------
+        # DROPIN
+        # -------------------------------------------------------
+        elif "dropin" in carrier_normalized:
+            # Ajusta la URL al endpoint correcto según la doc oficial
+            dropin_url = f"https://backend.dropin.com.mx/api/v1/track/{tracking_number}"
+            headers = {
+                "x-api-key": DROPIN_API_KEY,
+                "Accept": "application/json"
+            }
             r = requests.get(dropin_url, headers=headers)
             r.raise_for_status()
             dropin_data = r.json()
 
-            status = dropin_data.get("status", "unknown").lower()
-            events_list = dropin_data.get("events", [])
+            # EJEMPLO de respuesta (ajusta según tu doc de DropIn):
+            # {
+            #   "trackingNumber": "...",
+            #   "status": "En tránsito",
+            #   "events": [
+            #       {
+            #           "date": "2025-01-10T12:34:56",
+            #           "location": "CDMX",
+            #           "description": "Paquete recogido"
+            #       },
+            #       ...
+            #   ]
+            # }
 
-            if status == "in_transit":
-                return {
-                    "status": "in_transit",
-                    "description": "En tránsito (Dropin)",
-                    "events": events_list
-                }
-            elif status == "delivered":
-                return {
-                    "status": "delivered",
-                    "description": "Entregado (Dropin)",
-                    "events": events_list
-                }
+            raw_status = dropin_data.get("status", "").lower()
+            if raw_status in ["en transito", "in_transit", "transit"]:
+                status = "in_transit"
+                description = "En tránsito (DropIn)"
+            elif raw_status in ["entregado", "delivered"]:
+                status = "delivered"
+                description = "Entregado (DropIn)"
             else:
-                return {
-                    "status": "unknown",
-                    "description": f"Estado desconocido: {status}",
-                    "events": events_list
-                }
+                status = "unknown"
+                description = f"Estado desconocido: {raw_status}"
 
+            # Mapeamos los eventos
+            raw_events = dropin_data.get("events", [])
+            events_list = []
+            for ev in raw_events:
+                events_list.append({
+                    "date": ev.get("date", ""),
+                    "location": ev.get("location", ""),
+                    "description": ev.get("description", "")
+                })
+
+            return {
+                "status": status,
+                "description": description,
+                "events": events_list
+            }
+
+        # -------------------------------------------------------
+        # OTROS CARRIERS (NO SOPORTADOS)
+        # -------------------------------------------------------
         else:
-            # Paquetería no soportada
             return {
                 "status": "unknown",
                 "description": f"Paquetería no soportada: {tracking_company}",
@@ -293,9 +319,9 @@ def get_carrier_status(tracking_company, tracking_number):
             "events": []
         }
 
-# =============================================================================
+# -------------------------------------------------------------------------
 # ENDPOINT PRINCIPAL: /track-order
-# =============================================================================
+# -------------------------------------------------------------------------
 @app.route("/track-order", methods=["POST"])
 def track_order():
     """
@@ -378,16 +404,9 @@ def track_order():
 
     return jsonify(response_json)
 
-# =============================================================================
+# -------------------------------------------------------------------------
 # PUNTO DE ENTRADA DE LA APLICACIÓN
-# =============================================================================
+# -------------------------------------------------------------------------
 if __name__ == "__main__":
-    # -------------------------------------------------------------------------
-    # CAMBIO 1: Lectura del puerto desde la variable de entorno "PORT"
-    #           (usado por Render) o, en su defecto, usar 5000 en local.
-    #           También cambiamos host='0.0.0.0' para que acepte conexiones
-    #           externas (necesario en Render).
-    # -------------------------------------------------------------------------
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
-
