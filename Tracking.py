@@ -2,6 +2,9 @@
 # IMPORTACIONES
 # -------------------------------------------------------------------------
 from flask import Flask, request, jsonify
+# =============================================================================
+# CAMBIO 2: Se importa y configura Flask-CORS permitiendo origins="*"
+# =============================================================================
 from flask_cors import CORS  
 import requests
 import os
@@ -16,6 +19,10 @@ load_dotenv()
 # INICIALIZACIÓN DE FLASK
 # -------------------------------------------------------------------------
 app = Flask(__name__)
+
+# =============================================================================
+# CAMBIO 2 (continuación): Configuramos CORS para permitir cualquier origen
+# =============================================================================
 CORS(app, origins="*")  # Permite solicitudes desde cualquier dominio
 
 # =============================================================================
@@ -33,10 +40,6 @@ API_URL = f"https://{SHOPIFY_STORE}/admin/api/2023-10/graphql.json"
 DHL_API_KEY = os.getenv("DHL_API_KEY")
 DHL_API_SECRET = os.getenv("DHL_API_SECRET")
 ESTAFETA_API_KEY = os.getenv("ESTAFETA_API_KEY")
-
-# -------------------------
-# NUEVA: Clave de DropIn
-# -------------------------
 DROPIN_API_KEY = os.getenv("DROPIN_API_KEY")
 
 # =============================================================================
@@ -90,6 +93,7 @@ def get_order_from_shopify(order_name, email):
     }
     """
     variables = {"name": f"name:{order_name}"}
+
     headers = {
         "Content-Type": "application/json",
         "X-Shopify-Access-Token": ACCESS_TOKEN
@@ -125,7 +129,7 @@ def get_order_from_shopify(order_name, email):
 # =============================================================================
 def get_carrier_status(tracking_company, tracking_number):
     """
-    Consulta la API de la paquetería (DHL, Estafeta, DropIn...) para obtener estado y eventos.
+    Consulta la API de la paquetería (DHL, Estafeta, Dropin...) para obtener estado y eventos.
     Retorna un diccionario con:
       {
         "status": "in_transit" | "delivered" | "unknown" | "error" | "no_tracking",
@@ -149,9 +153,7 @@ def get_carrier_status(tracking_company, tracking_number):
     carrier = tracking_company.strip().lower()
 
     try:
-        # --------------------------------------------------
-        # 1. Ejemplo de integración con DHL
-        # --------------------------------------------------
+        # Ejemplo de integración con DHL
         if "dhl" in carrier:
             dhl_url = f"https://api-eu.dhl.com/track/shipments?trackingNumber={tracking_number}"
             headers = {
@@ -210,10 +212,8 @@ def get_carrier_status(tracking_company, tracking_number):
                     "events": events_list
                 }
 
-        # --------------------------------------------------
-        # 2. Ejemplo de integración con Estafeta
-        # --------------------------------------------------
         elif "estafeta" in carrier:
+            # Ejemplo placeholder Estafeta
             estafeta_url = f"https://api.estafeta.com/v1/track/{tracking_number}"
             headers = {"Authorization": f"Bearer {ESTAFETA_API_KEY}"}
             r = requests.get(estafeta_url, headers=headers)
@@ -242,46 +242,55 @@ def get_carrier_status(tracking_company, tracking_number):
                     "events": events_list
                 }
 
-        # --------------------------------------------------
-        # 3. Integración actualizada con DropIn
-        # --------------------------------------------------
         elif "dropin" in carrier:
-    # Usar el endpoint y autenticación correctos para DropIn
-    dropin_url = f"https://api.dropin.com.mx/v1/trackings/{tracking_number}"
-    headers = {"Authorization": f"Bearer {DROPIN_API_KEY}"}
-    r = requests.get(dropin_url, headers=headers)
-    r.raise_for_status()
-    dropin_data = r.json()
+            # Ejemplo placeholder Dropin
+            dropin_url = f"https://api.dropin.com.mx/v1/trackings/{tracking_number}"
+            headers = {"Authorization": f"Bearer {DROPIN_API_KEY}"}
+            r = requests.get(dropin_url, headers=headers)
+            r.raise_for_status()
+            dropin_data = r.json()
 
-    # Extraer el estado y los eventos de la respuesta de DropIn
-    status = dropin_data.get("status", "unknown").lower()
-    events_data = dropin_data.get("events", [])
-    events_list = []
-    for ev in events_data:
-        events_list.append({
-            "date": ev.get("date", ""),
-            "location": ev.get("location", ""),
-            "description": ev.get("description", "")
-        })
+            status = dropin_data.get("status", "unknown").lower()
+            events_list = dropin_data.get("events", [])
 
-    # Mapear el estado devuelto por DropIn a los estados esperados
-    if status == "in_transit":
+            if status == "in_transit":
+                return {
+                    "status": "in_transit",
+                    "description": "En tránsito (Dropin)",
+                    "events": events_list
+                }
+            elif status == "delivered":
+                return {
+                    "status": "delivered",
+                    "description": "Entregado (Dropin)",
+                    "events": events_list
+                }
+            else:
+                return {
+                    "status": "unknown",
+                    "description": f"Estado desconocido: {status}",
+                    "events": events_list
+                }
+
+        else:
+            # Paquetería no soportada
+            return {
+                "status": "unknown",
+                "description": f"Paquetería no soportada: {tracking_company}",
+                "events": []
+            }
+
+    except requests.exceptions.HTTPError as http_err:
         return {
-            "status": "in_transit",
-            "description": "En tránsito (Dropin)",
-            "events": events_list
+            "status": "error",
+            "description": f"Error HTTP: {http_err}",
+            "events": []
         }
-    elif status == "delivered":
+    except requests.exceptions.RequestException as e:
         return {
-            "status": "delivered",
-            "description": "Entregado (Dropin)",
-            "events": events_list
-        }
-    else:
-        return {
-            "status": "unknown",
-            "description": f"Estado desconocido: {status}",
-            "events": events_list
+            "status": "error",
+            "description": str(e),
+            "events": []
         }
 
 # =============================================================================
@@ -373,5 +382,12 @@ def track_order():
 # PUNTO DE ENTRADA DE LA APLICACIÓN
 # =============================================================================
 if __name__ == "__main__":
+    # -------------------------------------------------------------------------
+    # CAMBIO 1: Lectura del puerto desde la variable de entorno "PORT"
+    #           (usado por Render) o, en su defecto, usar 5000 en local.
+    #           También cambiamos host='0.0.0.0' para que acepte conexiones
+    #           externas (necesario en Render).
+    # -------------------------------------------------------------------------
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
+
