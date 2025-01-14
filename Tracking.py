@@ -22,8 +22,6 @@ CORS(app, origins="*")  # Permite solicitudes desde cualquier dominio
 # CONFIGURACIÓN DE SHOPIFY DESDE VARIABLES DE ENTORNO
 # =============================================================================
 SHOPIFY_STORE = os.getenv("SHOPIFY_STORE")
-API_KEY = os.getenv("API_KEY")                    # Sólo si usas OAuth
-API_SECRET_KEY = os.getenv("API_SECRET_KEY")      # Sólo si usas OAuth
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")          # Token con permisos
 API_URL = f"https://{SHOPIFY_STORE}/admin/api/2023-10/graphql.json"
 
@@ -31,22 +29,13 @@ API_URL = f"https://{SHOPIFY_STORE}/admin/api/2023-10/graphql.json"
 # CREDENCIALES DE PAQUETERÍAS DESDE VARIABLES DE ENTORNO
 # =============================================================================
 DHL_API_KEY = os.getenv("DHL_API_KEY")
-DHL_API_SECRET = os.getenv("DHL_API_SECRET")
 ESTAFETA_API_KEY = os.getenv("ESTAFETA_API_KEY")
-
-# -------------------------
-# NUEVA: Clave de DropIn
-# -------------------------
 DROPIN_API_KEY = os.getenv("DROPIN_API_KEY")
 
 # =============================================================================
 # FUNCIÓN: OBTENER ORDEN DE SHOPIFY (GraphQL)
 # =============================================================================
 def get_order_from_shopify(order_name, email):
-    """
-    Realiza una consulta GraphQL a Shopify para obtener los datos del pedido.
-    Verifica también que el email coincida con el de la orden.
-    """
     query = """
     query ($name: String!) {
       orders(first: 1, query: $name) {
@@ -107,7 +96,6 @@ def get_order_from_shopify(order_name, email):
         if not orders_edges:
             return None
 
-        # Busca el pedido que coincida con el email
         for order_edge in orders_edges:
             node = order_edge["node"]
             if node["email"].lower() == email.lower():
@@ -124,21 +112,6 @@ def get_order_from_shopify(order_name, email):
 # FUNCIÓN: OBTENER ESTADO DE LA PAQUETERÍA
 # =============================================================================
 def get_carrier_status(tracking_company, tracking_number):
-    """
-    Consulta la API de la paquetería (DHL, Estafeta, DropIn) para obtener estado y eventos.
-    Retorna un diccionario con:
-      {
-        "status": "in_transit" | "delivered" | "unknown" | "error" | "no_tracking",
-        "description": "Texto o descripción",
-        "events": [
-            {
-                "date": "YYYY-MM-DD HH:MM:SS",
-                "location": "Ubicación",
-                "description": "Evento"
-            }, ...
-        ]
-      }
-    """
     if not tracking_number:
         return {
             "status": "no_tracking",
@@ -175,7 +148,6 @@ def get_carrier_status(tracking_company, tracking_number):
             dhl_status_code = status_info.get("statusCode", "unknown").lower()
             dhl_status_desc = status_info.get("description", "Sin descripción")
 
-            # Historial de eventos
             events_data = shipment_info.get("events", [])
             events_list = []
             for ev in events_data:
@@ -190,7 +162,6 @@ def get_carrier_status(tracking_company, tracking_number):
                     "description": ev_description
                 })
 
-            # Mapear a in_transit, delivered, etc.
             if dhl_status_code in ["transit", "in_transit"]:
                 return {
                     "status": "in_transit",
@@ -246,8 +217,8 @@ def get_carrier_status(tracking_company, tracking_number):
         # 3. Integración por defecto: DropIn
         # --------------------------------------------------
         else:
-            # Asume que cualquier otro carrier (no DHL ni Estafeta) corresponde a DropIn
-            dropin_url = f"https://backend.dropin.com.mx/api/v1/shipments/{tracking_number}"
+            # Uso del endpoint con parámetro de consulta según la documentación
+            dropin_url = f"https://backend.dropin.com.mx/api/v1/shipments?trackingNumber={tracking_number}"
             headers = {
                 "x-api-key": DROPIN_API_KEY,
                 "Accept": "application/json"
@@ -256,26 +227,23 @@ def get_carrier_status(tracking_company, tracking_number):
             r.raise_for_status()
             dropin_data = r.json()
 
-            # Ajustar según la estructura real que devuelva DropIn
+            # Procesamiento de la respuesta según la estructura esperada por la API
             data_obj = dropin_data.get("data", {})
             attributes = data_obj.get("attributes", {})
             dropin_status = attributes.get("status", "unknown").lower()
             history = attributes.get("history", [])
 
-            # Construir lista de eventos en el formato esperado
             events_list = []
             for ev in history:
                 event_date = ev.get("updated_at", "")
                 event_location = ev.get("location", "Sin ubicación")
                 event_description = ev.get("description", "Sin descripción")
-
                 events_list.append({
                     "date": event_date,
                     "location": event_location,
                     "description": event_description
                 })
 
-            # Mapeo del estado
             if dropin_status in ["in_transit", "out_for_delivery"]:
                 return {
                     "status": "in_transit",
@@ -313,10 +281,6 @@ def get_carrier_status(tracking_company, tracking_number):
 # =============================================================================
 @app.route("/track-order", methods=["POST"])
 def track_order():
-    """
-    Endpoint POST para consultar la información de un pedido de Shopify
-    y su estado de envío (tracking) con la paquetería correspondiente.
-    """
     data = request.json
     order_number = data.get("orderNumber")
     email = data.get("email")
@@ -324,14 +288,12 @@ def track_order():
     if not order_number or not email:
         return jsonify({"error": "Número de pedido y correo son requeridos"}), 400
 
-    # 1. Obtenemos la orden desde Shopify
     shopify_order = get_order_from_shopify(order_number, email)
     if not shopify_order:
         return jsonify({"error": "Pedido no encontrado o el email no coincide"}), 404
     if "error" in shopify_order:
         return jsonify({"error": shopify_order["error"]}), 400
 
-    # 2. Extraer line items
     line_items_info = []
     for edge in shopify_order["lineItems"]["edges"]:
         node = edge["node"]
@@ -345,7 +307,6 @@ def track_order():
             "imageUrl": featured_image.get("url", "")
         })
 
-    # 3. Tomar tracking del fulfillment (si existe)
     tracking_number = None
     tracking_company = None
     fulfillments = shopify_order.get("fulfillments", [])
@@ -356,33 +317,26 @@ def track_order():
             tracking_number = tracking_info[0].get("number")
             tracking_company = tracking_info[0].get("company")
 
-    # 4. Consultar el estado con la paquetería
     carrier_status = get_carrier_status(tracking_company, tracking_number)
 
-    # 5. Mapeo a los 4 pasos (Pedido Recibido, Preparando, En Tránsito, Entregado)
-    step1_completed = True  # El pedido existe, así que el paso 1 está completo
-    step2_completed = bool(tracking_number and tracking_company)  # Preparando (si hay guía)
+    step1_completed = True
+    step2_completed = bool(tracking_number and tracking_company)
     step3_completed = (carrier_status["status"] == "in_transit" or carrier_status["status"] == "delivered")
     step4_completed = (carrier_status["status"] == "delivered")
 
-    # 6. Construimos la respuesta final
     response_json = {
         "name": shopify_order["name"],
         "email": shopify_order["email"],
-        "financialStatus": shopify_order["displayFinancialStatus"],  # Estado del pago
+        "financialStatus": shopify_order["displayFinancialStatus"],
         "fulfillmentStatus": shopify_order["displayFulfillmentStatus"],
         "lineItems": line_items_info,
         "totalPrice": shopify_order["totalPriceSet"]["shopMoney"]["amount"],
         "currency": shopify_order["totalPriceSet"]["shopMoney"]["currencyCode"],
-
-        # Datos de tracking
         "trackingNumber": tracking_number,
         "trackingCompany": tracking_company,
         "currentCarrierStatus": carrier_status["status"],
         "carrierDescription": carrier_status["description"],
         "events": carrier_status.get("events", []),
-
-        # Pasos de la barra de progreso
         "progressSteps": {
             "step1": step1_completed,
             "step2": step2_completed,
@@ -393,9 +347,6 @@ def track_order():
 
     return jsonify(response_json)
 
-# =============================================================================
-# PUNTO DE ENTRADA DE LA APLICACIÓN
-# =============================================================================
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
