@@ -7,6 +7,7 @@ import requests
 import os
 from dotenv import load_dotenv  # Para cargar variables de entorno desde .env
 import logging
+import json  # Para serializar el body al hacer la petición GET a Teiker
 
 # -------------------------------------------------------------------------
 # CONFIGURACIÓN DE LOGGING
@@ -39,8 +40,8 @@ API_URL = f"https://{SHOPIFY_STORE}/admin/api/2023-10/graphql.json"
 # CREDENCIALES DE PAQUETERÍAS DESDE VARIABLES DE ENTORNO
 # =============================================================================
 DHL_API_KEY = os.getenv("DHL_API_KEY")
-ESTAFETA_API_KEY = os.getenv("ESTAFETA_API_KEY")
-DROPIN_API_KEY = os.getenv("DROPIN_API_KEY")
+TEIKER_USER = os.getenv("TEIKER_USER")      # Usuario proporcionado por Teiker (ejemplo: "1873877121")
+TEIKER_PASS = os.getenv("TEIKER_PASS")      # Contraseña proporcionada por Teiker (ejemplo: "v7LHWz0laJ6o5VnjHS")
 
 # =============================================================================
 # FUNCIÓN: OBTENER ORDEN DE SHOPIFY (GraphQL)
@@ -101,7 +102,8 @@ def get_order_from_shopify(order_name, email):
     }
 
     logger.debug("URL de Shopify: %s", API_URL)
-    logger.debug("Headers (sin exponer token en producción): %s", {k: (v if k != "X-Shopify-Access-Token" else "*****") for k, v in headers.items()})
+    logger.debug("Headers (ocultando token en logs): %s",
+                 {k: (v if k != "X-Shopify-Access-Token" else "*****") for k, v in headers.items()})
     logger.debug("Payload GraphQL: %s", {"query": query, "variables": variables})
 
     try:
@@ -141,6 +143,7 @@ def get_order_from_shopify(order_name, email):
 def get_carrier_status(tracking_company, tracking_number):
     logger.info("Obteniendo estado de la paquetería. Empresa='%s', Número='%s'", tracking_company, tracking_number)
 
+    # Validaciones de tracking
     if not tracking_number:
         logger.debug("No hay número de rastreo proporcionado.")
         return {
@@ -151,25 +154,23 @@ def get_carrier_status(tracking_company, tracking_number):
 
     carrier = tracking_company.strip().lower() if tracking_company else ""
 
-    if "dhl" in carrier and not DHL_API_KEY:
-        logger.error("Falta DHL_API_KEY en entorno.")
-        return {"status": "error", "description": "Faltan credenciales de DHL", "events": []}
-    if "estafeta" in carrier and not ESTAFETA_API_KEY:
-        logger.error("Falta ESTAFETA_API_KEY en entorno.")
-        return {"status": "error", "description": "Faltan credenciales de Estafeta", "events": []}
-    if carrier not in ["dhl", "estafeta"] and not DROPIN_API_KEY:
-        logger.error("Falta DROPIN_API_KEY en entorno.")
-        return {"status": "error", "description": "Faltan credenciales de DropIn", "events": []}
+    # -------------------------------------------------------------------------
+    # 1) DHL (mantener lógica existente)
+    # -------------------------------------------------------------------------
+    if "dhl" in carrier:
+        if not DHL_API_KEY:
+            logger.error("Falta DHL_API_KEY en entorno.")
+            return {"status": "error", "description": "Faltan credenciales de DHL", "events": []}
 
-    try:
-        if "dhl" in carrier:
+        try:
             dhl_url = f"https://api-eu.dhl.com/track/shipments?trackingNumber={tracking_number}"
             headers = {
                 "DHL-API-Key": DHL_API_KEY,
                 "Accept": "application/json"
             }
             logger.debug("URL DHL: %s", dhl_url)
-            logger.debug("Headers DHL (ocultando API Key en producción): %s", {k: (v if k != "DHL-API-Key" else "*****") for k, v in headers.items()})
+            logger.debug("Headers DHL (ocultando API Key): %s",
+                         {k: (v if k != "DHL-API-Key" else "*****") for k, v in headers.items()})
 
             response = requests.get(dhl_url, headers=headers)
             logger.debug("Respuesta DHL: %s", response.text)
@@ -222,107 +223,132 @@ def get_carrier_status(tracking_company, tracking_number):
                     "events": events_list
                 }
 
-        elif "estafeta" in carrier:
-            estafeta_url = f"https://api.estafeta.com/v1/track/{tracking_number}"
-            headers = {"Authorization": f"Bearer {ESTAFETA_API_KEY}"}
-            logger.debug("URL Estafeta: %s", estafeta_url)
-            logger.debug("Headers Estafeta (ocultando API Key en producción): %s", {k: (v if k != "Authorization" else "*****") for k, v in headers.items()})
-
-            response = requests.get(estafeta_url, headers=headers)
-            logger.debug("Respuesta Estafeta: %s", response.text)
-            response.raise_for_status()
-
-            estafeta_data = response.json()
-            status = estafeta_data.get("current_status", "unknown").lower()
-            events_list = estafeta_data.get("events", [])
-
-            if status == "in_transit":
-                logger.debug("Paquete en tránsito (Estafeta).")
-                return {
-                    "status": "in_transit",
-                    "description": "En tránsito (Estafeta)",
-                    "events": events_list
-                }
-            elif status == "delivered":
-                logger.debug("Paquete entregado (Estafeta).")
-                return {
-                    "status": "delivered",
-                    "description": "Entregado (Estafeta)",
-                    "events": events_list
-                }
-            else:
-                logger.debug("Estado desconocido (Estafeta).")
-                return {
-                    "status": "unknown",
-                    "description": f"Estado desconocido: {status}",
-                    "events": events_list
-                }
-
-        else:
-            dropin_url = f"https://backend.dropin.com.mx/api/v1/parcels/parcel/{tracking_number}"
-            # Actualización: se usa el esquema "DropIn" en el encabezado Authorization
-            headers = {
-                "Authorization": f"DropIn {DROPIN_API_KEY}",
-                "Accept": "application/json"
+        except requests.exceptions.HTTPError as http_err:
+            logger.error("Error HTTP en la API de DHL: %s", http_err)
+            return {
+                "status": "error",
+                "description": f"Error HTTP: {http_err}",
+                "events": []
             }
-            logger.debug("URL DropIn: %s", dropin_url)
-            logger.debug("Headers DropIn (ocultando API Key en producción): %s", {k: (v if k != "Authorization" else "*****") for k, v in headers.items()})
+        except requests.exceptions.RequestException as e:
+            logger.error("Error de petición en la API de DHL: %s", e)
+            return {
+                "status": "error",
+                "description": str(e),
+                "events": []
+            }
 
-            response = requests.get(dropin_url, headers=headers)
-            logger.debug("Respuesta DropIn: %s", response.text)
+    # -------------------------------------------------------------------------
+    # 2) TEIKER (para cualquier carrier distinto de "dhl")
+    #    Basado en la documentación oficial:
+    #    https://dev.tecc.app/teiker_v2/public/api/RastrearEnvio
+    # -------------------------------------------------------------------------
+    else:
+        if not TEIKER_USER or not TEIKER_PASS:
+            logger.error("Faltan credenciales de Teiker (usuario o contraseña).")
+            return {
+                "status": "error",
+                "description": "Faltan credenciales de Teiker",
+                "events": []
+            }
+
+        try:
+            teiker_url = "https://dev.tecc.app/teiker_v2/public/api/RastrearEnvio"
+
+            # Body a enviar en la petición (aunque sea GET, Teiker requiere estos datos en el body)
+            payload = {
+                "User": TEIKER_USER,
+                "Password": TEIKER_PASS,
+                "GuiaCodigo": tracking_number
+            }
+
+            headers = {
+                "Content-Type": "application/json"
+            }
+
+            logger.debug("URL Teiker: %s", teiker_url)
+            logger.debug("Headers Teiker: %s", headers)
+            logger.debug("Payload Teiker (ocultando credenciales): %s",
+                         {
+                             "User": "*****",
+                             "Password": "*****",
+                             "GuiaCodigo": tracking_number
+                         })
+
+            # Petición GET, enviando JSON en 'data'
+            response = requests.get(
+                teiker_url,
+                headers=headers,
+                data=json.dumps(payload)
+            )
+            logger.debug("Respuesta Teiker: %s", response.text)
             response.raise_for_status()
 
-            dropin_data = response.json()
-            data_obj = dropin_data.get("data", {})
-            attributes = data_obj.get("attributes", {})
-            dropin_status = attributes.get("status", "unknown").lower()
-            history = attributes.get("history", [])
+            # Respuesta esperada:
+            # {
+            #   "2532856": {
+            #       "Status": "ENTREGADO",
+            #       "TrackingData": [
+            #         {"fecha": "...", "descripcion": "..."},
+            #         ...
+            #       ]
+            #   }
+            # }
+            teiker_data = response.json()
+            # Convertimos el tracking_number a string, pues la clave en el JSON
+            # viene como string
+            shipment_info = teiker_data.get(str(tracking_number), {})
 
+            teiker_status = shipment_info.get("Status", "UNKNOWN").lower()
+            tracking_events = shipment_info.get("TrackingData", [])
+
+            # Adaptar la lista de eventos al mismo formato (date/location/description)
             events_list = [
                 {
-                    "date": ev.get("updated_at", ""),
-                    "location": ev.get("location", "Sin ubicación"),
-                    "description": ev.get("description", "Sin descripción")
+                    "date": ev.get("fecha", ""),
+                    "location": "",  # Teiker no provee 'location', así que lo dejamos vacío
+                    "description": ev.get("descripcion", "")
                 }
-                for ev in history
+                for ev in tracking_events
             ]
 
-            if dropin_status in ["in_transit", "out_for_delivery"]:
-                logger.debug("Paquete en tránsito (DropIn).")
+            # Mapeo básico de estatus:
+            if teiker_status in ["in_transit", "en ruta", "en camino", "recoleccion", "recolección"]:
+                logger.debug("Paquete en tránsito (Teiker).")
                 return {
                     "status": "in_transit",
-                    "description": "En tránsito (DropIn)",
+                    "description": f"En tránsito (Teiker): {teiker_status}",
                     "events": events_list
                 }
-            elif dropin_status == "delivered":
-                logger.debug("Paquete entregado (DropIn).")
+            elif teiker_status in ["delivered", "entregado"]:
+                logger.debug("Paquete entregado (Teiker).")
                 return {
                     "status": "delivered",
-                    "description": "Entregado (DropIn)",
+                    "description": "Entregado (Teiker)",
                     "events": events_list
                 }
             else:
-                logger.debug("Estado desconocido (DropIn).")
+                logger.debug("Estado desconocido (Teiker): %s", teiker_status)
                 return {
                     "status": "unknown",
-                    "description": f"Estado desconocido: {dropin_status}",
+                    "description": f"Estado desconocido: {teiker_status}",
                     "events": events_list
                 }
 
-    except requests.exceptions.HTTPError as http_err:
-        logger.error("Error HTTP en la API de paquetería: %s", http_err)
-        return {
-            "status": "error",
-            "description": f"Error HTTP: {http_err}",
-            "events": []
-        }
-    except requests.exceptions.RequestException as e:
-        logger.error("Error de petición en la API de paquetería: %s", e)
-        return {
-            "status": "error",
-            "description": str(e),
-            "events": []
-        }
+        except requests.exceptions.HTTPError as http_err:
+            logger.error("Error HTTP en la API de Teiker: %s", http_err)
+            return {
+                "status": "error",
+                "description": f"Error HTTP: {http_err}",
+                "events": []
+            }
+        except requests.exceptions.RequestException as e:
+            logger.error("Error de petición en la API de Teiker: %s", e)
+            return {
+                "status": "error",
+                "description": str(e),
+                "events": []
+            }
 
 # =============================================================================
 # ENDPOINT PRINCIPAL: /track-order
@@ -349,6 +375,7 @@ def track_order():
         logger.error("Shopify retornó un error: %s", shopify_order["error"])
         return jsonify({"error": shopify_order["error"]}), 400
 
+    # Obtener info de line items
     line_items_info = []
     for edge in shopify_order["lineItems"]["edges"]:
         node = edge["node"]
@@ -362,6 +389,7 @@ def track_order():
             "imageUrl": featured_image.get("url", "")
         })
 
+    # Obtener tracking de la 1ra fulfillment
     fulfillments = shopify_order.get("fulfillments", [])
     tracking_number = None
     tracking_company = None
@@ -374,13 +402,17 @@ def track_order():
             tracking_company = tracking_info[0].get("company")
 
     logger.info("Tracking: empresa='%s', número='%s'", tracking_company, tracking_number)
+
+    # Consultar estado con DHL o Teiker
     carrier_status = get_carrier_status(tracking_company, tracking_number)
 
+    # Lógica de pasos
     step1_completed = True
     step2_completed = bool(tracking_number and tracking_company)
     step3_completed = (carrier_status["status"] == "in_transit" or carrier_status["status"] == "delivered")
     step4_completed = (carrier_status["status"] == "delivered")
 
+    # Construir respuesta final
     response_json = {
         "name": shopify_order["name"],
         "email": shopify_order["email"],
