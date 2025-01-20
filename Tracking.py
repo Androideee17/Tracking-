@@ -42,8 +42,8 @@ API_URL = f"https://{SHOPIFY_STORE}/admin/api/2023-10/graphql.json"
 DHL_API_KEY = os.getenv("DHL_API_KEY")
 
 # TEIKER (usuario y contraseña)
-TEIKER_USER = os.getenv("TEIKER_USER")   # <--- Agrega tu usuario de Teiker
-TEIKER_PASS = os.getenv("TEIKER_PASS")   # <--- Agrega tu contraseña de Teiker
+TEIKER_USER = os.getenv("TEIKER_USER")
+TEIKER_PASS = os.getenv("TEIKER_PASS")
 
 # =============================================================================
 # FUNCIÓN: OBTENER ORDEN DE SHOPIFY (GraphQL)
@@ -90,6 +90,7 @@ def get_order_from_shopify(order_name, email):
               trackingInfo {
                 number
                 company
+                url
               }
             }
           }
@@ -238,10 +239,7 @@ def get_carrier_status(tracking_company, tracking_number):
             }
 
     # -------------------------------------------------------------------------
-    # 2) TEIKER (REEMPLAZA a DROPIN) # TEIKER
-    #
-    #    Según la documentación oficial:
-    #    https://dev.tecc.app/teiker_v2/public/api/RastrearEnvio
+    # 2) TEIKER
     # -------------------------------------------------------------------------
     else:
         if not TEIKER_USER or not TEIKER_PASS:
@@ -255,7 +253,7 @@ def get_carrier_status(tracking_company, tracking_number):
         try:
             teiker_url = "https://envios.teiker.mx/api/RastrearEnvio"
 
-            # Body para la petición GET (Teiker requiere JSON con User, Password, GuiaCodigo)
+            # Body para la petición GET
             payload = {
                 "User": TEIKER_USER,
                 "Password": TEIKER_PASS,
@@ -275,7 +273,7 @@ def get_carrier_status(tracking_company, tracking_number):
                              "GuiaCodigo": tracking_number
                          })
 
-            # Hacemos un GET pero enviamos el JSON en el 'data'
+            # La API de Teiker indica que se use GET, pero envía el body en 'data'
             response = requests.get(
                 teiker_url,
                 headers=headers,
@@ -286,12 +284,11 @@ def get_carrier_status(tracking_company, tracking_number):
 
             teiker_data = response.json()
 
-            # Teiker retorna un objeto donde la clave es el número de guía (en string)
+            # Teiker retorna un dict con la clave siendo el número de guía
             shipment_info = teiker_data.get(str(tracking_number), {})
             teiker_status = shipment_info.get("Status", "UNKNOWN").lower()
             tracking_events = shipment_info.get("TrackingData", [])
 
-            # Convertimos la lista de eventos al mismo formato (date, location, description)
             events_list = [
                 {
                     "date": ev.get("fecha", ""),
@@ -301,7 +298,6 @@ def get_carrier_status(tracking_company, tracking_number):
                 for ev in tracking_events
             ]
 
-            # Mapeo de estatus Teiker -> estatus genéricos
             if teiker_status in ["in_transit", "en ruta", "en camino", "recoleccion", "recolección"]:
                 return {
                     "status": "in_transit",
@@ -380,6 +376,7 @@ def track_order():
     fulfillments = shopify_order.get("fulfillments", [])
     tracking_number = None
     tracking_company = None
+    tracking_url = None  # <-- Nuevo
 
     if fulfillments:
         first_fulfillment = fulfillments[0]
@@ -387,15 +384,16 @@ def track_order():
         if tracking_info:
             tracking_number = tracking_info[0].get("number")
             tracking_company = tracking_info[0].get("company")
+            tracking_url = tracking_info[0].get("url")  # <-- Nuevo
 
-    logger.info("Tracking: empresa='%s', número='%s'", tracking_company, tracking_number)
+    logger.info("Tracking: empresa='%s', número='%s', url='%s'", tracking_company, tracking_number, tracking_url)
 
     # Obtener estado de la paquetería (DHL o Teiker)
     carrier_status = get_carrier_status(tracking_company, tracking_number)
 
     # Lógica de pasos
-    step1_completed = True
-    step2_completed = bool(tracking_number and tracking_company)
+    step1_completed = True  # Pedido recibido (siempre que exista la orden)
+    step2_completed = bool(tracking_number and tracking_company)  # Preparando
     step3_completed = (carrier_status["status"] == "in_transit" or carrier_status["status"] == "delivered")
     step4_completed = (carrier_status["status"] == "delivered")
 
@@ -410,6 +408,7 @@ def track_order():
         "currency": shopify_order["totalPriceSet"]["shopMoney"]["currencyCode"],
         "trackingNumber": tracking_number,
         "trackingCompany": tracking_company,
+        "trackingUrl": tracking_url,  # <-- Nuevo
         "currentCarrierStatus": carrier_status["status"],
         "carrierDescription": carrier_status["description"],
         "events": carrier_status.get("events", []),
