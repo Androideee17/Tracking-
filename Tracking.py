@@ -253,7 +253,7 @@ def get_carrier_status(tracking_company, tracking_number):
             }
 
         try:
-            teiker_url = "https://dev.tecc.app/teiker_v2/public/api/RastrearEnvio"
+            teiker_url = "https://envios.teiker.mx/api/RastrearEnvio"
 
             # Body para la petición GET (Teiker requiere JSON con User, Password, GuiaCodigo)
             payload = {
