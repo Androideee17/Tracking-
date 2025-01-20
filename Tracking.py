@@ -5,7 +5,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
 import os
-from dotenv import load_dotenv  # Para cargar variables de entorno desde .env
+from dotenv import load_dotenv
 import logging
 import json  # Para serializar el body al hacer la petición GET a Teiker
 
@@ -13,7 +13,7 @@ import json  # Para serializar el body al hacer la petición GET a Teiker
 # CONFIGURACIÓN DE LOGGING
 # -------------------------------------------------------------------------
 logging.basicConfig(
-    level=logging.DEBUG,  # Nivel de detalle: DEBUG, INFO, WARNING, ERROR, CRITICAL
+    level=logging.DEBUG,
     format='%(asctime)s [%(levelname)s] %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -27,21 +27,23 @@ load_dotenv()
 # INICIALIZACIÓN DE FLASK
 # -------------------------------------------------------------------------
 app = Flask(__name__)
-CORS(app, origins="*")  # Permite solicitudes desde cualquier dominio
+CORS(app, origins="*")
 
 # =============================================================================
 # CONFIGURACIÓN DE SHOPIFY DESDE VARIABLES DE ENTORNO
 # =============================================================================
 SHOPIFY_STORE = os.getenv("SHOPIFY_STORE")
-ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")  # Token con permisos
+ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 API_URL = f"https://{SHOPIFY_STORE}/admin/api/2023-10/graphql.json"
 
 # =============================================================================
 # CREDENCIALES DE PAQUETERÍAS DESDE VARIABLES DE ENTORNO
 # =============================================================================
 DHL_API_KEY = os.getenv("DHL_API_KEY")
-TEIKER_USER = os.getenv("TEIKER_USER")      # Usuario proporcionado por Teiker (ejemplo: "1873877121")
-TEIKER_PASS = os.getenv("TEIKER_PASS")      # Contraseña proporcionada por Teiker (ejemplo: "v7LHWz0laJ6o5VnjHS")
+
+# TEIKER (usuario y contraseña)
+TEIKER_USER = os.getenv("TEIKER_USER")   # <--- Agrega tu usuario de Teiker
+TEIKER_PASS = os.getenv("TEIKER_PASS")   # <--- Agrega tu contraseña de Teiker
 
 # =============================================================================
 # FUNCIÓN: OBTENER ORDEN DE SHOPIFY (GraphQL)
@@ -102,7 +104,7 @@ def get_order_from_shopify(order_name, email):
     }
 
     logger.debug("URL de Shopify: %s", API_URL)
-    logger.debug("Headers (ocultando token en logs): %s",
+    logger.debug("Headers (ocultando token): %s",
                  {k: (v if k != "X-Shopify-Access-Token" else "*****") for k, v in headers.items()})
     logger.debug("Payload GraphQL: %s", {"query": query, "variables": variables})
 
@@ -123,6 +125,7 @@ def get_order_from_shopify(order_name, email):
 
         for order_edge in orders_edges:
             node = order_edge["node"]
+            # Coincidir email en minúsculas para evitar problemas de mayúsculas
             if node["email"].lower() == email.lower():
                 logger.info("Orden encontrada y el email coincide.")
                 return node
@@ -143,9 +146,8 @@ def get_order_from_shopify(order_name, email):
 def get_carrier_status(tracking_company, tracking_number):
     logger.info("Obteniendo estado de la paquetería. Empresa='%s', Número='%s'", tracking_company, tracking_number)
 
-    # Validaciones de tracking
+    # Si no hay número de rastreo, devolvemos estado "no_tracking"
     if not tracking_number:
-        logger.debug("No hay número de rastreo proporcionado.")
         return {
             "status": "no_tracking",
             "description": "No hay tracking asignado",
@@ -155,7 +157,7 @@ def get_carrier_status(tracking_company, tracking_number):
     carrier = tracking_company.strip().lower() if tracking_company else ""
 
     # -------------------------------------------------------------------------
-    # 1) DHL (mantener lógica existente)
+    # 1) DHL
     # -------------------------------------------------------------------------
     if "dhl" in carrier:
         if not DHL_API_KEY:
@@ -202,21 +204,18 @@ def get_carrier_status(tracking_company, tracking_number):
             ]
 
             if dhl_status_code in ["transit", "in_transit"]:
-                logger.debug("Paquete en tránsito (DHL).")
                 return {
                     "status": "in_transit",
                     "description": dhl_status_desc,
                     "events": events_list
                 }
             elif dhl_status_code == "delivered":
-                logger.debug("Paquete entregado (DHL).")
                 return {
                     "status": "delivered",
                     "description": dhl_status_desc,
                     "events": events_list
                 }
             else:
-                logger.debug("Estado desconocido (DHL).")
                 return {
                     "status": "unknown",
                     "description": dhl_status_desc,
@@ -239,8 +238,9 @@ def get_carrier_status(tracking_company, tracking_number):
             }
 
     # -------------------------------------------------------------------------
-    # 2) TEIKER (para cualquier carrier distinto de "dhl")
-    #    Basado en la documentación oficial:
+    # 2) TEIKER (REEMPLAZA a DROPIN) # TEIKER
+    #
+    #    Según la documentación oficial:
     #    https://dev.tecc.app/teiker_v2/public/api/RastrearEnvio
     # -------------------------------------------------------------------------
     else:
@@ -255,7 +255,7 @@ def get_carrier_status(tracking_company, tracking_number):
         try:
             teiker_url = "https://dev.tecc.app/teiker_v2/public/api/RastrearEnvio"
 
-            # Body a enviar en la petición (aunque sea GET, Teiker requiere estos datos en el body)
+            # Body para la petición GET (Teiker requiere JSON con User, Password, GuiaCodigo)
             payload = {
                 "User": TEIKER_USER,
                 "Password": TEIKER_PASS,
@@ -275,7 +275,7 @@ def get_carrier_status(tracking_company, tracking_number):
                              "GuiaCodigo": tracking_number
                          })
 
-            # Petición GET, enviando JSON en 'data'
+            # Hacemos un GET pero enviamos el JSON en el 'data'
             response = requests.get(
                 teiker_url,
                 headers=headers,
@@ -284,51 +284,37 @@ def get_carrier_status(tracking_company, tracking_number):
             logger.debug("Respuesta Teiker: %s", response.text)
             response.raise_for_status()
 
-            # Respuesta esperada:
-            # {
-            #   "2532856": {
-            #       "Status": "ENTREGADO",
-            #       "TrackingData": [
-            #         {"fecha": "...", "descripcion": "..."},
-            #         ...
-            #       ]
-            #   }
-            # }
             teiker_data = response.json()
-            # Convertimos el tracking_number a string, pues la clave en el JSON
-            # viene como string
-            shipment_info = teiker_data.get(str(tracking_number), {})
 
+            # Teiker retorna un objeto donde la clave es el número de guía (en string)
+            shipment_info = teiker_data.get(str(tracking_number), {})
             teiker_status = shipment_info.get("Status", "UNKNOWN").lower()
             tracking_events = shipment_info.get("TrackingData", [])
 
-            # Adaptar la lista de eventos al mismo formato (date/location/description)
+            # Convertimos la lista de eventos al mismo formato (date, location, description)
             events_list = [
                 {
                     "date": ev.get("fecha", ""),
-                    "location": "",  # Teiker no provee 'location', así que lo dejamos vacío
+                    "location": "",  # Teiker no provee ubicación
                     "description": ev.get("descripcion", "")
                 }
                 for ev in tracking_events
             ]
 
-            # Mapeo básico de estatus:
+            # Mapeo de estatus Teiker -> estatus genéricos
             if teiker_status in ["in_transit", "en ruta", "en camino", "recoleccion", "recolección"]:
-                logger.debug("Paquete en tránsito (Teiker).")
                 return {
                     "status": "in_transit",
                     "description": f"En tránsito (Teiker): {teiker_status}",
                     "events": events_list
                 }
             elif teiker_status in ["delivered", "entregado"]:
-                logger.debug("Paquete entregado (Teiker).")
                 return {
                     "status": "delivered",
                     "description": "Entregado (Teiker)",
                     "events": events_list
                 }
             else:
-                logger.debug("Estado desconocido (Teiker): %s", teiker_status)
                 return {
                     "status": "unknown",
                     "description": f"Estado desconocido: {teiker_status}",
@@ -362,20 +348,21 @@ def track_order():
     order_number = data.get("orderNumber")
     email = data.get("email")
 
+    # Validación mínima
     if not order_number or not email:
         logger.warning("Faltan campos obligatorios: orderNumber=%s, email=%s", order_number, email)
         return jsonify({"error": "Número de pedido y correo son requeridos"}), 400
 
-    logger.info("Obteniendo información de la orden en Shopify.")
+    # Buscar orden en Shopify
     shopify_order = get_order_from_shopify(order_number, email)
     if not shopify_order:
         logger.warning("Pedido no encontrado o el email no coincide.")
         return jsonify({"error": "Pedido no encontrado o el email no coincide"}), 404
     if "error" in shopify_order:
-        logger.error("Shopify retornó un error: %s", shopify_order["error"])
+        logger.error("Error al obtener la orden de Shopify: %s", shopify_order["error"])
         return jsonify({"error": shopify_order["error"]}), 400
 
-    # Obtener info de line items
+    # Obtener line items
     line_items_info = []
     for edge in shopify_order["lineItems"]["edges"]:
         node = edge["node"]
@@ -403,7 +390,7 @@ def track_order():
 
     logger.info("Tracking: empresa='%s', número='%s'", tracking_company, tracking_number)
 
-    # Consultar estado con DHL o Teiker
+    # Obtener estado de la paquetería (DHL o Teiker)
     carrier_status = get_carrier_status(tracking_company, tracking_number)
 
     # Lógica de pasos
