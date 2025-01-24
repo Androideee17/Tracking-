@@ -158,7 +158,7 @@ def get_carrier_status(tracking_company, tracking_number):
     carrier = tracking_company.strip().lower() if tracking_company else ""
 
     # -------------------------------------------------------------------------
-    # 1) DHL (NO SE MODIFICA)
+    # 1) DHL
     # -------------------------------------------------------------------------
     if "dhl" in carrier:
         if not DHL_API_KEY:
@@ -239,20 +239,7 @@ def get_carrier_status(tracking_company, tracking_number):
             }
 
     # -------------------------------------------------------------------------
-    # 2) ESTAFETA (NUEVO BLOQUE: SIN LLAMAR A API)
-    # -------------------------------------------------------------------------
-    elif "estafeta" in carrier:
-        # Devolvemos un estado genérico "in_transit" (o "delivered" si así lo deseas).
-        # Aquí forzamos "in_transit" para que no falle nada y se "comporte" como Teiker, 
-        # pero sin llamar a la API de Estafeta (porque está bloqueada).
-        return {
-            "status": "in_transit",
-            "description": "En tránsito (Estafeta) - Sin conexión a API",
-            "events": []
-        }
-
-    # -------------------------------------------------------------------------
-    # 3) TEIKER u OTRO (TODO LO DEMÁS)
+    # 2) TEIKER
     # -------------------------------------------------------------------------
     else:
         if not TEIKER_USER or not TEIKER_PASS:
@@ -389,7 +376,7 @@ def track_order():
     fulfillments = shopify_order.get("fulfillments", [])
     tracking_number = None
     tracking_company = None
-    tracking_url = None
+    tracking_url = None  # <-- Nuevo
 
     if fulfillments:
         first_fulfillment = fulfillments[0]
@@ -397,15 +384,15 @@ def track_order():
         if tracking_info:
             tracking_number = tracking_info[0].get("number")
             tracking_company = tracking_info[0].get("company")
-            tracking_url = tracking_info[0].get("url")
+            tracking_url = tracking_info[0].get("url")  # <-- Nuevo
 
     logger.info("Tracking: empresa='%s', número='%s', url='%s'", tracking_company, tracking_number, tracking_url)
 
-    # Obtener estado de la paquetería (DHL, Estafeta o Teiker/Otro)
+    # Obtener estado de la paquetería (DHL o Teiker)
     carrier_status = get_carrier_status(tracking_company, tracking_number)
 
     # Lógica de pasos
-    step1_completed = True  # Pedido recibido (existe la orden)
+    step1_completed = True  # Pedido recibido (siempre que exista la orden)
     step2_completed = bool(tracking_number and tracking_company)  # Preparando
     step3_completed = (carrier_status["status"] == "in_transit" or carrier_status["status"] == "delivered")
     step4_completed = (carrier_status["status"] == "delivered")
@@ -421,7 +408,7 @@ def track_order():
         "currency": shopify_order["totalPriceSet"]["shopMoney"]["currencyCode"],
         "trackingNumber": tracking_number,
         "trackingCompany": tracking_company,
-        "trackingUrl": tracking_url,
+        "trackingUrl": tracking_url,  # <-- Nuevo
         "currentCarrierStatus": carrier_status["status"],
         "carrierDescription": carrier_status["description"],
         "events": carrier_status.get("events", []),
@@ -440,6 +427,6 @@ def track_order():
 # PUNTO DE ENTRADA DE LA APLICACIÓN
 # =============================================================================
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 3000))
+    port = int(os.getenv("PORT", 5000))
     logger.info("Iniciando aplicación Flask en el puerto %d", port)
     app.run(host="0.0.0.0", port=port, debug=True)
