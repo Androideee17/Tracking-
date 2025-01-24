@@ -440,6 +440,6 @@ def track_order():
 # PUNTO DE ENTRADA DE LA APLICACIÓN
 # =============================================================================
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
+    port = int(os.getenv("PORT", 3000))
     logger.info("Iniciando aplicación Flask en el puerto %d", port)
     app.run(host="0.0.0.0", port=port, debug=True)
