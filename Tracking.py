@@ -7,9 +7,7 @@ import requests
 import os
 from dotenv import load_dotenv
 import logging
-import json
-from datetime import datetime, timedelta
-from dateutil.parser import parse as parse_datetime  # Para parsear createdAt de Shopify
+import json  # Para serializar el body al hacer la petición GET a Teiker
 
 # -------------------------------------------------------------------------
 # CONFIGURACIÓN DE LOGGING
@@ -49,7 +47,6 @@ TEIKER_PASS = os.getenv("TEIKER_PASS")
 
 # =============================================================================
 # FUNCIÓN: OBTENER ORDEN DE SHOPIFY (GraphQL)
-#    - Se agrega "createdAt" en fulfillments para saber cuándo se preparó
 # =============================================================================
 def get_order_from_shopify(order_name, email):
     logger.info("Obteniendo orden de Shopify para order_name='%s', email='%s'", order_name, email)
@@ -90,7 +87,6 @@ def get_order_from_shopify(order_name, email):
               }
             }
             fulfillments(first: 5) {
-              createdAt
               trackingInfo {
                 number
                 company
@@ -162,7 +158,7 @@ def get_carrier_status(tracking_company, tracking_number):
     carrier = tracking_company.strip().lower() if tracking_company else ""
 
     # -------------------------------------------------------------------------
-    # 1) DHL (MISMA LÓGICA)
+    # 1) DHL
     # -------------------------------------------------------------------------
     if "dhl" in carrier:
         if not DHL_API_KEY:
@@ -243,18 +239,19 @@ def get_carrier_status(tracking_company, tracking_number):
             }
 
     # -------------------------------------------------------------------------
-    # 2) ESTAFETA (NO CONTACTAR API, SOLO MOSTRAR GUÍA)
+    # 2) ESTAFETA
     # -------------------------------------------------------------------------
     elif "estafeta" in carrier:
-        logger.info("El carrier es Estafeta; no se contacta su API.")
+        # NO se consulta API, solo retornamos la info básica
+        logger.info("Carrier es Estafeta: no se realiza consulta a API externa.")
         return {
-            "status": "manual_check",
-            "description": "Requiere rastreo manual (Estafeta)",
+            "status": "estafeta",
+            "description": "Envío con Estafeta (sin consulta API).",
             "events": []
         }
 
     # -------------------------------------------------------------------------
-    # 3) TEIKER (SI NO ES DHL NI ESTAFETA)
+    # 3) TEIKER (por descarte)
     # -------------------------------------------------------------------------
     else:
         if not TEIKER_USER or not TEIKER_PASS:
@@ -267,14 +264,18 @@ def get_carrier_status(tracking_company, tracking_number):
 
         try:
             teiker_url = "https://envios.teiker.mx/api/RastrearEnvio"
+
+            # Body para la petición GET
             payload = {
                 "User": TEIKER_USER,
                 "Password": TEIKER_PASS,
                 "GuiaCodigo": tracking_number
             }
+
             headers = {
                 "Content-Type": "application/json"
             }
+
             logger.debug("URL Teiker: %s", teiker_url)
             logger.debug("Headers Teiker: %s", headers)
             logger.debug("Payload Teiker (ocultando credenciales): %s",
@@ -284,6 +285,7 @@ def get_carrier_status(tracking_company, tracking_number):
                              "GuiaCodigo": tracking_number
                          })
 
+            # La API de Teiker indica que se use GET, pero envía el body en 'data'
             response = requests.get(
                 teiker_url,
                 headers=headers,
@@ -294,6 +296,7 @@ def get_carrier_status(tracking_company, tracking_number):
 
             teiker_data = response.json()
 
+            # Teiker retorna un dict con la clave siendo el número de guía
             shipment_info = teiker_data.get(str(tracking_number), {})
             teiker_status = shipment_info.get("Status", "UNKNOWN").lower()
             tracking_events = shipment_info.get("TrackingData", [])
@@ -301,23 +304,19 @@ def get_carrier_status(tracking_company, tracking_number):
             events_list = [
                 {
                     "date": ev.get("fecha", ""),
-                    "location": "",
+                    "location": "",  # Teiker no provee ubicación
                     "description": ev.get("descripcion", "")
                 }
                 for ev in tracking_events
             ]
 
-            # Normalizamos algunos estados en español
-            in_transit_synonyms = ["in_transit", "en ruta", "en camino", "recoleccion", "recolección"]
-            delivered_synonyms = ["delivered", "entregado"]
-
-            if teiker_status in in_transit_synonyms:
+            if teiker_status in ["in_transit", "en ruta", "en camino", "recoleccion", "recolección"]:
                 return {
                     "status": "in_transit",
                     "description": f"En tránsito (Teiker): {teiker_status}",
                     "events": events_list
                 }
-            elif teiker_status in delivered_synonyms:
+            elif teiker_status in ["delivered", "entregado"]:
                 return {
                     "status": "delivered",
                     "description": "Entregado (Teiker)",
@@ -390,13 +389,10 @@ def track_order():
     tracking_number = None
     tracking_company = None
     tracking_url = None
-    fulfillment_created_at = None  # Para saber cuándo se "preparó"
 
     if fulfillments:
         first_fulfillment = fulfillments[0]
         tracking_info = first_fulfillment.get("trackingInfo", [])
-        fulfillment_created_at = first_fulfillment.get("createdAt")  # Fecha de creación del fulfillment
-
         if tracking_info:
             tracking_number = tracking_info[0].get("number")
             tracking_company = tracking_info[0].get("company")
@@ -404,25 +400,8 @@ def track_order():
 
     logger.info("Tracking: empresa='%s', número='%s', url='%s'", tracking_company, tracking_number, tracking_url)
 
-    # Obtener estado de la paquetería (DHL, Estafeta o Teiker)
+    # Obtener estado de la paquetería
     carrier_status = get_carrier_status(tracking_company, tracking_number)
-
-    # -------------------------------------------------------------------------
-    # REGLA: Si pasaron 15 horas desde que se preparó el pedido (createdAt)
-    #        y aún no está "delivered" ni "error", forzamos "in_transit".
-    # -------------------------------------------------------------------------
-    if fulfillment_created_at and carrier_status["status"] not in ["delivered", "error", "no_tracking"]:
-        try:
-            dt_fulfilled = parse_datetime(fulfillment_created_at)
-            now_utc = datetime.utcnow()
-            time_diff = now_utc - dt_fulfilled
-
-            if time_diff.total_seconds() >= 15 * 3600:  # 15 horas
-                logger.info("Han pasado más de 15 horas desde la preparación. Forzando estado 'in_transit'.")
-                carrier_status["status"] = "in_transit"
-                carrier_status["description"] = "En tránsito (forzado luego de 15h)"
-        except Exception as e:
-            logger.warning("No se pudo parsear fulfillment_created_at: %s", e)
 
     # Lógica de pasos
     step1_completed = True  # Pedido recibido (siempre que exista la orden)
