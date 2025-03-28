@@ -374,13 +374,13 @@ def track_order():
     line_items_info = []
     for edge in shopify_order["lineItems"]["edges"]:
         node = edge["node"]
-        variant = node.get("variant", {})
-        product = variant.get("product", {})
-        featured_image = product.get("featuredImage", {})
+        variant = node.get("variant") or {}
+        product = variant.get("product") or {}
+        featured_image = product.get("featuredImage") or {}
 
         line_items_info.append({
-            "title": node["title"],
-            "quantity": node["quantity"],
+            "title": node.get("title", ""),
+            "quantity": node.get("quantity", 0),
             "imageUrl": featured_image.get("url", "")
         })
 
@@ -434,6 +434,14 @@ def track_order():
 
     logger.debug("Respuesta final /track-order: %s", response_json)
     return jsonify(response_json)
+
+# =============================================================================
+# MANEJADOR GLOBAL DE ERRORES
+# =============================================================================
+@app.errorhandler(Exception)
+def handle_exception(e):
+    logger.exception("Error no controlado: %s", e)
+    return jsonify({"error": "Ha ocurrido un error procesando el pedido, por favor intenta nuevamente."}), 400
 
 # =============================================================================
 # PUNTO DE ENTRADA DE LA APLICACIÓN
