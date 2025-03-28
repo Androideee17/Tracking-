@@ -384,19 +384,18 @@ def track_order():
             "imageUrl": featured_image.get("url", "")
         })
 
-    # Obtener tracking de la 1ra fulfillment
-    fulfillments = shopify_order.get("fulfillments", [])
+    # Obtener tracking de la fulfillment
     tracking_number = None
     tracking_company = None
     tracking_url = None
 
-    if fulfillments:
-        first_fulfillment = fulfillments[0]
-        tracking_info = first_fulfillment.get("trackingInfo", [])
-        if tracking_info:
-            tracking_number = tracking_info[0].get("number")
-            tracking_company = tracking_info[0].get("company")
-            tracking_url = tracking_info[0].get("url")
+    # Se asume que fulfillments es un objeto que contiene la propiedad "trackingInfo"
+    fulfillments = shopify_order.get("fulfillments", {})
+    tracking_info = fulfillments.get("trackingInfo", [])
+    if tracking_info:
+        tracking_number = tracking_info[0].get("number")
+        tracking_company = tracking_info[0].get("company")
+        tracking_url = tracking_info[0].get("url")
 
     logger.info("Tracking: empresa='%s', número='%s', url='%s'", tracking_company, tracking_number, tracking_url)
 
